@@ -1,5 +1,5 @@
-import OpenAI from "openai";
-import {
+import type OpenAI from "openai";
+import type {
   CoreMessage,
   StreamedLoading,
   StreamedMessage,
@@ -10,7 +10,7 @@ import {
   Citation,
   StreamedError,
 } from "@/types";
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 
 export interface QueueAssistantResponseParams {
   controller: ReadableStreamDefaultController;

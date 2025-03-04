@@ -1,6 +1,6 @@
 import { OpenAI } from "openai";
 import { Pinecone } from "@pinecone-database/pinecone";
-import { AIProviders, Chat, Intention } from "@/types";
+import type { AIProviders, Chat, Intention } from "@/types";
 import { IntentionModule } from "@/modules/intention";
 import { ResponseModule } from "@/modules/response";
 import { PINECONE_INDEX_NAME } from "@/configuration/pinecone";
