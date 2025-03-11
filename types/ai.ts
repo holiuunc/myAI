@@ -1,6 +1,6 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 
 export const coreMessageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -12,6 +12,11 @@ export const intentionTypeSchema = z.enum([
   "hostile_message",
   "random",
   "question",
+  "explanation_request",
+  "exercise_request",
+  "knowledge_assessment",
+  "study_plan_request",
+  "document_summary_request"
 ]);
 export type IntentionType = z.infer<typeof intentionTypeSchema>;
 

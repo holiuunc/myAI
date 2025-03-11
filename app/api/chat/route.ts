@@ -57,11 +57,24 @@ export async function POST(req: Request) {
 
   const intention: Intention = await determineIntention(chat);
 
-  if (intention.type === "question") {
-    return ResponseModule.respondToQuestion(chat, providers, pineconeIndex);
-  } else if (intention.type === "hostile_message") {
-    return ResponseModule.respondToHostileMessage(chat, providers);
-  } else {
-    return ResponseModule.respondToRandomMessage(chat, providers);
+  switch (intention.type) {
+    case "hostile_message":
+      return ResponseModule.respondToHostileMessage(chat, providers);
+    case "random":
+      return ResponseModule.respondToRandomMessage(chat, providers);
+    case "question":
+      return ResponseModule.respondToQuestion(chat, providers, pineconeIndex);
+    case "explanation_request":
+      return ResponseModule.respondToExplanationRequest(chat, providers, pineconeIndex);
+    case "exercise_request":
+      return ResponseModule.respondToExerciseRequest(chat, providers, pineconeIndex);
+    case "knowledge_assessment":
+      return ResponseModule.respondToKnowledgeAssessment(chat, providers, pineconeIndex);
+    case "study_plan_request":
+      return ResponseModule.respondToStudyPlanRequest(chat, providers, pineconeIndex);
+    case "document_summary_request":
+      return ResponseModule.respondToDocumentSummaryRequest(chat, providers, pineconeIndex);
+    default:
+      return ResponseModule.respondToRandomMessage(chat, providers);
   }
 }
