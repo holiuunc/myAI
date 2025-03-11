@@ -3,19 +3,18 @@
 import { useEffect, useState } from "react";
 import { INITIAL_MESSAGE } from "@/configuration/chat";
 import { WORD_CUTOFF, WORD_BREAK_MESSAGE } from "@/configuration/chat";
-import {
+import type {
   LoadingIndicator,
   DisplayMessage,
   StreamedDone,
-  streamedDoneSchema,
   StreamedLoading,
-  streamedLoadingSchema,
   StreamedMessage,
-  streamedMessageSchema,
   Citation,
   StreamedError,
-  streamedErrorSchema,
+  UploadedDocument,
 } from "@/types";
+
+import { streamedDoneSchema, streamedMessageSchema, streamedLoadingSchema, streamedErrorSchema } from "@/types/streaming";
 
 export default function useApp() {
   const initialAssistantMessage: DisplayMessage = {
@@ -31,6 +30,7 @@ export default function useApp() {
   const [isLoading, setIsLoading] = useState(false);
   const [indicatorState, setIndicatorState] = useState<LoadingIndicator[]>([]);
   const [input, setInput] = useState("");
+  const [documents, setDocuments] = useState<UploadedDocument[]>([]);
 
   useEffect(() => {
     setWordCount(
@@ -40,6 +40,95 @@ export default function useApp() {
       )
     );
   }, [messages]);
+
+  useEffect(() => {
+    // Load messages from local storage when component mounts
+    const storedMessages = localStorage.getItem("chatMessages");
+    if (storedMessages) {
+      setMessages(JSON.parse(storedMessages));
+    }
+    
+    // Load documents from local storage
+    const storedDocuments = localStorage.getItem("uploadedDocuments");
+    if (storedDocuments) {
+      setDocuments(JSON.parse(storedDocuments));
+    } else {
+      // Fetch documents from API
+      fetchDocuments();
+    }
+  }, []);
+
+  useEffect(() => {
+    // Save messages to local storage whenever they change
+    if (messages.length > 1) {
+      localStorage.setItem("chatMessages", JSON.stringify(messages));
+    } else {
+      localStorage.removeItem("chatMessages");
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    // Save documents to local storage whenever they change
+    if (documents.length > 0) {
+      localStorage.setItem("uploadedDocuments", JSON.stringify(documents));
+    } else {
+      localStorage.removeItem("uploadedDocuments");
+    }
+  }, [documents]);
+
+  const fetchDocuments = async () => {
+    try {
+      const response = await fetch("/api/documents");
+      if (response.ok) {
+        const data = await response.json();
+        setDocuments(data.documents);
+      }
+    } catch (error) {
+      console.error("Failed to fetch documents:", error);
+    }
+  };
+
+  const uploadDocument = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    try {
+      const response = await fetch("/api/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        setDocuments((prev: any) => [...prev, data.document]);
+        return data.document;
+      // biome-ignore lint/style/noUselessElse: <explanation>
+      } else {
+        throw new Error("Upload failed");
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      throw error;
+    }
+  };
+
+  const deleteDocument = async (id: string) => {
+    try {
+      const response = await fetch(`/api/documents/${id}`, {
+        method: "DELETE",
+      });
+      
+      if (response.ok) {
+        setDocuments((prev) => prev.filter(doc => doc.id !== id));
+      } else {
+        throw new Error("Delete failed");
+      }
+    } catch (error) {
+      console.error("Delete error:", error);
+      throw error;
+    }
+  };
 
   const addUserMessage = (input: string) => {
     const newUserMessage: DisplayMessage = {
@@ -203,16 +292,16 @@ export default function useApp() {
     if (storedMessages) {
       setMessages(JSON.parse(storedMessages));
     }
-  }, [setMessages]);
+  }, []);
 
-  useEffect(() => {
-    // Save messages to local storage whenever they change
-    if (messages.length > 1) {
-      localStorage.setItem("chatMessages", JSON.stringify(messages));
-    } else {
-      localStorage.removeItem("chatMessages");
-    }
-  }, [messages]);
+  // useEffect(() => {
+  //   // Save messages to local storage whenever they change
+  //   if (messages.length > 1) {
+  //     localStorage.setItem("chatMessages", JSON.stringify(messages));
+  //   } else {
+  //     localStorage.removeItem("chatMessages");
+  //   }
+  // }, [messages]);
 
   const clearMessages = () => {
     setMessages([]);
@@ -228,5 +317,8 @@ export default function useApp() {
     isLoading,
     setMessages,
     clearMessages,
+    documents,
+    uploadDocument,
+    deleteDocument,
   };
 }

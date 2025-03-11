@@ -30,3 +30,14 @@ export const citationSchema = z.object({
   source_description: z.string(),
 });
 export type Citation = z.infer<typeof citationSchema>;
+
+export const documentChunkSchema = z.object({
+  text: z.string(),
+  pre_context: z.string(),
+  post_context: z.string(),
+  source_url: z.string(),
+  source_description: z.string(),
+  order: z.number(),
+  embedding: z.array(z.number()).optional(),
+});
+export type DocumentChunk = z.infer<typeof documentChunkSchema>;

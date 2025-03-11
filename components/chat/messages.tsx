@@ -1,10 +1,11 @@
-import { DisplayMessage } from "@/types";
 import { motion } from "framer-motion";
 import Image from "next/image";
 import { Formatting } from "./formatting";
-import { LoadingIndicator } from "@/types";
 import Loading from "./loading";
 import { AI_NAME } from "@/configuration/identity";
+
+import type { DisplayMessage } from "@/types";
+import type { LoadingIndicator } from "@/types";
 
 function AILogo() {
   return (
@@ -80,12 +81,13 @@ export default function ChatMessages({
       transition={{ duration: 0.5 }}
       className="flex flex-col flex-1 p-1 gap-3"
     >
-      <div className="h-[60px]"></div>
+      <div className="h-[60px]" />
       {messages.length === 0 ? (
         <EmptyMessages />
       ) : (
         messages.map((message, index) => (
           <motion.div
+            // biome-ignore lint/suspicious/noArrayIndexKey: <explanation>
             key={index}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -100,7 +102,7 @@ export default function ChatMessages({
         ))
       )}
       {showLoading && <Loading indicatorState={indicatorState} />}
-      <div className="h-[225px]"></div>
+      <div className="h-[225px]" />
     </motion.div>
   );
 }
