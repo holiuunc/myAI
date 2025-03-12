@@ -6,10 +6,15 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   const id = params.id;
-  console.log(`API route: DELETE /api/documents/${id} called`);
+  
+  // Check if this is a force delete (from URL search params)
+  const { searchParams } = new URL(req.url);
+  const forceDelete = searchParams.get('force') === 'true';
+  
+  console.log(`API route: DELETE /api/documents/${id} called (force: ${forceDelete})`);
   
   try {
-    await deleteDocument(id);
+    await deleteDocument(id, forceDelete);
     console.log(`Successfully deleted document with ID: ${id}`);
     return NextResponse.json({ success: true, id });
   } catch (error) {

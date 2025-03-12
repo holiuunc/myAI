@@ -4,18 +4,19 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { FileIcon, Upload, Trash2, FileText } from "lucide-react";
+import { FileIcon, Trash2, FileText } from "lucide-react";
 import type { UploadedDocument } from "@/types";
 import { FileUploader } from "./file-uploader";
 
 interface DocumentPanelProps {
   documents: UploadedDocument[];
   onUpload: (file: File) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onDelete: (id: string, force?: boolean) => Promise<void>; // Add optional force parameter
 }
 
 export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelProps) {
   const [isUploading, setIsUploading] = useState(false);
+  const [failedDeleteId, setFailedDeleteId] = useState<string | null>(null);
   
   const handleUpload = async (file: File) => {
     setIsUploading(true);
@@ -32,11 +33,21 @@ export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelPr
     try {
       console.log(`Deleting document with ID: ${id}`);
       await onDelete(id);
-      // You could add a toast notification here
       console.log(`Document deleted successfully: ${id}`);
     } catch (error) {
       console.error(`Failed to delete document: ${error}`);
-      // Add error toast here
+      setFailedDeleteId(id);
+    }
+  };
+
+  const handleForceDelete = async (id: string) => {
+    try {
+      console.log(`Force deleting document with ID: ${id}`);
+      await onDelete(id, true);
+      console.log(`Document force deleted successfully: ${id}`);
+      setFailedDeleteId(null);
+    } catch (error) {
+      console.error(`Failed to force delete document: ${error}`);
     }
   };
 
@@ -82,14 +93,30 @@ export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelPr
                       </p>
                     </div>
                   </div>
-                  <Button 
-                    variant="ghost" 
-                    size="sm"
-                    onClick={() => handleDelete(doc.id)}
-                    className="text-red-500 hover:text-red-700"
-                    >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  <div className="flex">
+                    {/* Show force delete button if this document failed to delete normally */}
+                    {failedDeleteId === doc.id ? (
+                      <div className="flex flex-col gap-2 items-end">
+                        <p className="text-xs text-red-600">Delete failed</p>
+                        <Button 
+                          variant="destructive" 
+                          size="sm"
+                          onClick={() => handleForceDelete(doc.id)}
+                        >
+                          Force Remove
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={() => handleDelete(doc.id)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             ))}

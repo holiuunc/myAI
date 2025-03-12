@@ -113,11 +113,13 @@ export default function useApp() {
     }
   };
 
-  // Add or check this function in your hook
-  const deleteDocument = async (id: string) => {
-    console.log(`Hook: deleteDocument called with ID ${id}`);
+  // In your useApp hook
+  const deleteDocument = async (id: string, force = false) => {
+    console.log(`Hook: deleteDocument called with ID ${id}, force: ${force}`);
     
-    const response = await fetch(`/api/documents/${id}`, {
+    const url = force ? `/api/documents/${id}?force=true` : `/api/documents/${id}`;
+    
+    const response = await fetch(url, {
       method: 'DELETE',
     });
     
@@ -129,7 +131,7 @@ export default function useApp() {
       throw new Error(errorData.error || 'Failed to delete document');
     }
     
-    // Update local state after successful deletion
+    // Update local state
     setDocuments(prev => prev.filter(doc => doc.id !== id));
     
     return await response.json();

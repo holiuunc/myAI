@@ -21,6 +21,16 @@ export default function Chat() {
     deleteDocument,
   } = useApp();
 
+  const handleDeleteDocument = async (id: string, force = false) => {
+    try {
+      // Use the deleteDocument function from your useApp hook
+      await deleteDocument(id, force);
+    } catch (error) {
+      console.error("Failed to delete document:", error);
+      throw error;  // Re-throw to be handled by document panel
+    }
+  };
+
   return (
     <>
       <ChatHeader clearMessages={clearMessages} />
@@ -37,7 +47,7 @@ export default function Chat() {
               <DocumentPanel 
                 documents={documents} 
                 onUpload={uploadDocument} 
-                onDelete={deleteDocument}
+                onDelete={handleDeleteDocument}
               />
             </ResizablePanel>
           </ResizablePanelGroup>

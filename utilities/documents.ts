@@ -61,8 +61,8 @@ export async function processDocument(file: File): Promise<UploadedDocument> {
   return document;
 }
 
-export async function deleteDocument(id: string): Promise<void> {
-  console.log(`Server: deleteDocument called with ID ${id}`);
+export async function deleteDocument(id: string, forceDelete = false): Promise<void> {
+  console.log(`Server: deleteDocument called with ID ${id} (forceDelete: ${forceDelete})`);
   
   try {
     // First check if the document exists
@@ -73,15 +73,25 @@ export async function deleteDocument(id: string): Promise<void> {
       throw new Error(`Document with ID ${id} not found`);
     }
     
-    // Remove document metadata
+    // Always remove document metadata
     documents = documents.filter(doc => doc.id !== id);
     console.log(`Removed document metadata for ID ${id}`);
     
-    // Remove document chunks from Pinecone
-    await deleteDocumentChunksFromPinecone(id);
+    // Only attempt to remove from Pinecone if not force deleting
+    if (!forceDelete) {
+      try {
+        // Remove document chunks from Pinecone
+        await deleteDocumentChunksFromPinecone(id);
+      } catch (pineconeError) {
+        console.error(`Error deleting from Pinecone: ${pineconeError}`);
+        // Only throw if not force deleting
+        if (!forceDelete) throw pineconeError;
+      }
+    }
   } catch (error) {
     console.error(`Error in deleteDocument: ${error}`);
-    throw error; // Re-throw to be handled by the API route
+    // If force delete, don't throw the error
+    if (!forceDelete) throw error;
   }
 }
 
