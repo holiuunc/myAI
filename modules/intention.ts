@@ -5,6 +5,7 @@ import { intentionSchema } from "@/types";
 import { HISTORY_CONTEXT_LENGTH } from "@/configuration/chat";
 import { INTENTION_PROMPT } from "@/configuration/prompts";
 import { INTENTION_MODEL } from "@/configuration/models";
+import { ResponseModule } from "./response";
 
 /**
  * IntentionModule is responsible for detecting intentions
@@ -33,6 +34,8 @@ export class IntentionModule {
     const lastUserMessage = mostRecentMessages
       .filter((msg: { role: string; }) => msg.role === "user")
       .pop()?.content?.toLowerCase() || "";
+
+    const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
 
     // Pattern matching for educational queries
     const explanationPatterns = [

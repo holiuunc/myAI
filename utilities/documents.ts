@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Pinecone } from '@pinecone-database/pinecone';
-import { PINECONE_INDEX_NAME } from '@/configuration/pinecone';
+import { PINECONE_INDEX_NAME, QUESTION_RESPONSE_TOP_K } from '@/configuration/pinecone';
 import { OpenAI } from 'openai';
-import type { UploadedDocument } from '@/types';
+import { chunkSchema, type Chunk, type UploadedDocument } from '@/types';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -23,8 +23,16 @@ export async function getDocuments(): Promise<UploadedDocument[]> {
 }
 
 export async function processDocument(file: File): Promise<UploadedDocument> {
+  console.log(`Processing document: ${file.name}`);
+  
   // Extract content from the file (PDF, DOCX, or TXT)
   const content = await extractTextFromFile(file);
+  console.log(`Extracted ${content.length} characters from file`);
+
+  // Check for empty content
+  if (!content || content.trim().length === 0) {
+    throw new Error("The document appears to be empty or could not be processed");
+  }
   
   // Create document metadata
   const document: UploadedDocument = {
@@ -34,11 +42,21 @@ export async function processDocument(file: File): Promise<UploadedDocument> {
     content,
   };
   
+  console.log(`Created document metadata with ID: ${document.id}`);
+  
   // Store document metadata
   documents.push(document);
   
   // Process document for RAG
-  await processDocumentForRAG(document);
+  try {
+    console.log('Starting RAG processing');
+    await processDocumentForRAG(document);
+    console.log('Completed RAG processing');
+  } catch (error: unknown) {
+    console.error('Error in processDocumentForRAG:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to process document for RAG: ${errorMessage}`);
+  }
   
   return document;
 }
@@ -52,25 +70,28 @@ export async function deleteDocument(id: string): Promise<void> {
 }
 
 async function extractTextFromFile(file: File): Promise<string> {
-  // Extract text based on file type
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
   
   if (file.type === 'application/pdf') {
-    // Use a PDF parsing library (you'll need to install one)
-    // Example: return extractTextFromPDF(buffer);
-    return "PDF extraction - implement with pdf-parse or similar library";
-  }
-  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    // Use a DOCX parsing library (you'll need to install one)
-    // Example: return extractTextFromDOCX(buffer);
-    return "DOCX extraction - implement with mammoth or similar library";
-  }
-  if (file.type === 'text/plain') {
+    // For a proper implementation, you'd use pdf-parse library
+    // Since you may not have it installed yet, let's handle text files first
+    console.log('PDF detected - using plain text extraction for now');
+    return new TextDecoder().decode(buffer);
+  // biome-ignore lint/style/noUselessElse: <explanation>
+  } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    // For a proper implementation, you'd use mammoth library
+    console.log('DOCX detected - using plain text extraction for now');
+    return new TextDecoder().decode(buffer);
+  // biome-ignore lint/style/noUselessElse: <explanation>
+  } else if (file.type === 'text/plain') {
     // Simple text file
-    return buffer.toString('utf-8');
+    return new TextDecoder().decode(buffer);
+  // biome-ignore lint/style/noUselessElse: <explanation>
+  } else {
+    console.warn(`Unsupported file type: ${file.type}, treating as plain text`);
+    return new TextDecoder().decode(buffer);
   }
-  
-  throw new Error('Unsupported file type');
 }
 
 async function processDocumentForRAG(document: UploadedDocument): Promise<void> {
@@ -85,7 +106,7 @@ async function processDocumentForRAG(document: UploadedDocument): Promise<void> 
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-function splitIntoChunks(content: string, documentId: string, documentTitle: string, chunkSize = 1000, overlap = 200): any[] {
+export function splitIntoChunks(content: string, documentId: string, documentTitle: string, chunkSize = 1000, overlap = 200): any[] {
   const chunks = [];
   let i = 0;
   
@@ -149,15 +170,26 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
   const batchSize = 100;
   for (let i = 0; i < vectors.length; i += batchSize) {
     const batch = vectors.slice(i, i + batchSize);
+    console.log(`Upserting batch ${i/batchSize + 1} to Pinecone`);
     await pineconeIndex.upsert(batch);
   }
+  
+  console.log('Successfully stored chunks in Pinecone');
 }
 
 async function deleteDocumentChunksFromPinecone(documentId: string): Promise<void> {
-  // Delete all vectors with matching document ID
-  await pineconeIndex.deleteMany({
-    filter: {
-      source_url: { $eq: documentId },
-    },
-  });
+  console.log(`Deleting chunks for document ${documentId} from Pinecone`);
+  
+  try {
+    // Delete all vectors with matching document ID
+    await pineconeIndex.deleteMany({
+      filter: {
+        source_url: { $eq: documentId },
+      },
+    });
+    console.log('Successfully deleted chunks from Pinecone');
+  } catch (error) {
+    console.error('Error deleting chunks from Pinecone:', error);
+    throw error;
+  }
 }

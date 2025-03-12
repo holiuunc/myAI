@@ -16,6 +16,7 @@ import {
   getContextFromSources,
   getCitationsFromChunks,
   buildPromptFromContext,
+  searchForChunksWithFilter,
 } from "@/utilities/chat";
 import {
   queueAssistantResponse,
@@ -69,12 +70,14 @@ import {
   DOCUMENT_SUMMARY_MODEL,
   DOCUMENT_SUMMARY_TEMPERATURE,
 } from "@/configuration/models";
+import { getDocuments } from "@/utilities/documents";
 
 /**
  * ResponseModule is responsible for collecting data and building a response
  */
 // biome-ignore lint/complexity/noStaticOnlyClass: <explanation>
 export class ResponseModule {
+  
   static async respondToRandomMessage(
     chat: Chat,
     providers: AIProviders
@@ -189,15 +192,47 @@ export class ResponseModule {
           );
           const { embedding }: { embedding: number[] } =
             await embedHypotheticalData(hypotheticalData, providers.openai);
-          queueIndicator({
-            controller,
-            status: "Reading through documents",
-            icon: "searching",
-          });
-          const chunks: Chunk[] = await searchForChunksUsingEmbedding(
-            embedding,
-            index
-          );
+          
+            const lastUserMessage = chat.messages
+            .filter(msg => msg.role === "user")
+            .pop()?.content || "";
+  
+          // Check if a specific document was referenced
+          const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
+  
+          // Use different search strategies based on document reference
+          let chunks: Chunk[];
+          if (referencedDocId) {
+            queueIndicator({
+              controller,
+              status: "Looking specifically in the referenced document",
+              icon: "searching",
+            });
+            
+            chunks = await searchForChunksWithFilter(
+              embedding, 
+              index,
+              { source_url: { $eq: referencedDocId } }
+            );
+            
+            // If no relevant chunks found, fall back to regular search
+            if (chunks.length === 0) {
+              queueIndicator({
+                controller,
+                status: "Expanding search to all documents",
+                icon: "searching",
+              });
+              chunks = await searchForChunksUsingEmbedding(embedding, index);
+            }
+          } else {
+            queueIndicator({
+              controller,
+              status: "Reading through documents",
+              icon: "searching",
+            });
+            chunks = await searchForChunksUsingEmbedding(embedding, index);
+          }
+
           const sources: Source[] = await getSourcesFromChunks(chunks);
           queueIndicator({
             controller,
@@ -283,15 +318,47 @@ export class ResponseModule {
           );
           const { embedding }: { embedding: number[] } =
             await embedHypotheticalData(hypotheticalData, providers.openai);
-          queueIndicator({
-            controller,
-            status: "Searching for relevant educational materials",
-            icon: "searching",
-          });
-          const chunks: Chunk[] = await searchForChunksUsingEmbedding(
-            embedding,
-            index
-          );
+          
+          const lastUserMessage = chat.messages
+            .filter(msg => msg.role === "user")
+            .pop()?.content || "";
+  
+          // Check if a specific document was referenced
+          const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
+  
+          // Use different search strategies based on document reference
+          let chunks: Chunk[];
+          if (referencedDocId) {
+            queueIndicator({
+              controller,
+              status: "Looking specifically in the referenced document",
+              icon: "searching",
+            });
+            
+            chunks = await searchForChunksWithFilter(
+              embedding, 
+              index,
+              { source_url: { $eq: referencedDocId } }
+            );
+            
+            // If no relevant chunks found, fall back to regular search
+            if (chunks.length === 0) {
+              queueIndicator({
+                controller,
+                status: "Expanding search to all documents",
+                icon: "searching",
+              });
+              chunks = await searchForChunksUsingEmbedding(embedding, index);
+            }
+          } else {
+            queueIndicator({
+              controller,
+              status: "Reading through documents",
+              icon: "searching",
+            });
+            chunks = await searchForChunksUsingEmbedding(embedding, index);
+          }
+
           const sources: Source[] = await getSourcesFromChunks(chunks);
           queueIndicator({
             controller,
@@ -377,15 +444,47 @@ export class ResponseModule {
           );
           const { embedding }: { embedding: number[] } =
             await embedHypotheticalData(hypotheticalData, providers.openai);
-          queueIndicator({
-            controller,
-            status: "Finding relevant practice materials",
-            icon: "searching",
-          });
-          const chunks: Chunk[] = await searchForChunksUsingEmbedding(
-            embedding,
-            index
-          );
+          
+          const lastUserMessage = chat.messages
+            .filter(msg => msg.role === "user")
+            .pop()?.content || "";
+  
+          // Check if a specific document was referenced
+          const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
+  
+          // Use different search strategies based on document reference
+          let chunks: Chunk[];
+          if (referencedDocId) {
+            queueIndicator({
+              controller,
+              status: "Looking specifically in the referenced document",
+              icon: "searching",
+            });
+            
+            chunks = await searchForChunksWithFilter(
+              embedding, 
+              index,
+              { source_url: { $eq: referencedDocId } }
+            );
+            
+            // If no relevant chunks found, fall back to regular search
+            if (chunks.length === 0) {
+              queueIndicator({
+                controller,
+                status: "Expanding search to all documents",
+                icon: "searching",
+              });
+              chunks = await searchForChunksUsingEmbedding(embedding, index);
+            }
+          } else {
+            queueIndicator({
+              controller,
+              status: "Reading through documents",
+              icon: "searching",
+            });
+            chunks = await searchForChunksUsingEmbedding(embedding, index);
+          }
+
           const sources: Source[] = await getSourcesFromChunks(chunks);
           queueIndicator({
             controller,
@@ -471,15 +570,47 @@ export class ResponseModule {
           );
           const { embedding }: { embedding: number[] } =
             await embedHypotheticalData(hypotheticalData, providers.openai);
-          queueIndicator({
-            controller,
-            status: "Gathering assessment materials",
-            icon: "searching",
-          });
-          const chunks: Chunk[] = await searchForChunksUsingEmbedding(
-            embedding,
-            index
-          );
+          
+          const lastUserMessage = chat.messages
+            .filter(msg => msg.role === "user")
+            .pop()?.content || "";
+  
+          // Check if a specific document was referenced
+          const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
+  
+          // Use different search strategies based on document reference
+          let chunks: Chunk[];
+          if (referencedDocId) {
+            queueIndicator({
+              controller,
+              status: "Looking specifically in the referenced document",
+              icon: "searching",
+            });
+            
+            chunks = await searchForChunksWithFilter(
+              embedding, 
+              index,
+              { source_url: { $eq: referencedDocId } }
+            );
+            
+            // If no relevant chunks found, fall back to regular search
+            if (chunks.length === 0) {
+              queueIndicator({
+                controller,
+                status: "Expanding search to all documents",
+                icon: "searching",
+              });
+              chunks = await searchForChunksUsingEmbedding(embedding, index);
+            }
+          } else {
+            queueIndicator({
+              controller,
+              status: "Reading through documents",
+              icon: "searching",
+            });
+            chunks = await searchForChunksUsingEmbedding(embedding, index);
+          }
+
           const sources: Source[] = await getSourcesFromChunks(chunks);
           queueIndicator({
             controller,
@@ -565,15 +696,47 @@ export class ResponseModule {
           );
           const { embedding }: { embedding: number[] } =
             await embedHypotheticalData(hypotheticalData, providers.openai);
-          queueIndicator({
-            controller,
-            status: "Finding relevant learning materials",
-            icon: "searching",
-          });
-          const chunks: Chunk[] = await searchForChunksUsingEmbedding(
-            embedding,
-            index
-          );
+          
+          const lastUserMessage = chat.messages
+            .filter(msg => msg.role === "user")
+            .pop()?.content || "";
+  
+          // Check if a specific document was referenced
+          const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
+  
+          // Use different search strategies based on document reference
+          let chunks: Chunk[];
+          if (referencedDocId) {
+            queueIndicator({
+              controller,
+              status: "Looking specifically in the referenced document",
+              icon: "searching",
+            });
+            
+            chunks = await searchForChunksWithFilter(
+              embedding, 
+              index,
+              { source_url: { $eq: referencedDocId } }
+            );
+            
+            // If no relevant chunks found, fall back to regular search
+            if (chunks.length === 0) {
+              queueIndicator({
+                controller,
+                status: "Expanding search to all documents",
+                icon: "searching",
+              });
+              chunks = await searchForChunksUsingEmbedding(embedding, index);
+            }
+          } else {
+            queueIndicator({
+              controller,
+              status: "Reading through documents",
+              icon: "searching",
+            });
+            chunks = await searchForChunksUsingEmbedding(embedding, index);
+          }
+
           const sources: Source[] = await getSourcesFromChunks(chunks);
           queueIndicator({
             controller,
@@ -659,15 +822,47 @@ export class ResponseModule {
           );
           const { embedding }: { embedding: number[] } =
             await embedHypotheticalData(hypotheticalData, providers.openai);
-          queueIndicator({
-            controller,
-            status: "Retrieving document contents",
-            icon: "searching",
-          });
-          const chunks: Chunk[] = await searchForChunksUsingEmbedding(
-            embedding,
-            index
-          );
+          
+          const lastUserMessage = chat.messages
+            .filter(msg => msg.role === "user")
+            .pop()?.content || "";
+  
+          // Check if a specific document was referenced
+          const referencedDocId = await ResponseModule.findReferencedDocument(lastUserMessage);
+  
+          // Use different search strategies based on document reference
+          let chunks: Chunk[];
+          if (referencedDocId) {
+            queueIndicator({
+              controller,
+              status: "Looking specifically in the referenced document",
+              icon: "searching",
+            });
+            
+            chunks = await searchForChunksWithFilter(
+              embedding, 
+              index,
+              { source_url: { $eq: referencedDocId } }
+            );
+            
+            // If no relevant chunks found, fall back to regular search
+            if (chunks.length === 0) {
+              queueIndicator({
+                controller,
+                status: "Expanding search to all documents",
+                icon: "searching",
+              });
+              chunks = await searchForChunksUsingEmbedding(embedding, index);
+            }
+          } else {
+            queueIndicator({
+              controller,
+              status: "Reading through documents",
+              icon: "searching",
+            });
+            chunks = await searchForChunksUsingEmbedding(embedding, index);
+          }
+
           const sources: Source[] = await getSourcesFromChunks(chunks);
           queueIndicator({
             controller,
@@ -725,6 +920,37 @@ export class ResponseModule {
         Connection: "keep-alive",
       },
     });
+  }
+
+  // Add this function to the ResponseModule class
+  static async findReferencedDocument(message: string): Promise<string | null> {
+    // Get list of all documents
+    const documents = await getDocuments();
+    
+    if (documents.length === 0) {
+      return null;
+    }
+    
+    // Try to find a document mention in the message
+    for (const doc of documents) {
+      // Create a regex that will match even partial document names
+      // Remove file extension for better matching
+      const baseTitle = doc.title.replace(/\.[^/.]+$/, "");
+      const cleanTitle = baseTitle.replace(/[^\w\s]/g, '').trim();
+      const titleWords = cleanTitle.split(/\s+/).filter(word => word.length > 3);
+      
+      // If multiple significant words match, consider it a reference
+      const matchCount = titleWords.filter(word => 
+        new RegExp(`\\b${word}\\b`, 'i').test(message)
+      ).length;
+      
+      if (matchCount >= Math.min(2, titleWords.length)) {
+        console.log(`Found document reference: ${doc.title} (matched ${matchCount} words)`);
+        return doc.id;
+      }
+    }
+    
+    return null;
   }
 
 }

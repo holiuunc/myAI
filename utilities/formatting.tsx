@@ -1,5 +1,5 @@
 import { CitationCircle } from "@/components/chat/citation";
-import { Citation } from "@/types";
+import type { Citation } from "@/types";
 import React from "react";
 
 // Regex to check if the processed content contains any potential LaTeX patterns
@@ -60,14 +60,14 @@ export const processLaTeX = (_content: string) => {
 export function preprocessLaTeX(content: string): string {
   // Step 1: Protect code blocks
   const codeBlocks: string[] = [];
-  content = content.replace(/(```[\s\S]*?```|`[^`\n]+`)/g, (match, code) => {
+  let processedContent = content.replace(/(```[\s\S]*?```|`[^`\n]+`)/g, (match, code) => {
     codeBlocks.push(code);
     return `<<CODE_BLOCK_${codeBlocks.length - 1}>>`;
   });
 
   // Step 2: Protect existing LaTeX expressions
   const latexExpressions: string[] = [];
-  content = content.replace(
+  processedContent = processedContent.replace(
     /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g,
     (match) => {
       latexExpressions.push(match);
@@ -76,25 +76,25 @@ export function preprocessLaTeX(content: string): string {
   );
 
   // Step 3: Escape dollar signs that are likely currency indicators
-  content = content.replace(/\$(?=\d)/g, "\\$");
+  processedContent = processedContent.replace(/\$(?=\d)/g, "\\$");
 
   // Step 4: Restore LaTeX expressions
-  content = content.replace(
+  processedContent = processedContent.replace(
     /<<LATEX_(\d+)>>/g,
-    (_, index) => latexExpressions[parseInt(index)]
+    (_, index) => latexExpressions[Number.parseInt(index)]
   );
 
   // Step 5: Restore code blocks
-  content = content.replace(
+  processedContent = processedContent.replace(
     /<<CODE_BLOCK_(\d+)>>/g,
-    (_, index) => codeBlocks[parseInt(index)]
+    (_, index) => codeBlocks[Number.parseInt(index)]
   );
 
   // Step 6: Apply additional escaping functions
-  content = escapeBrackets(content);
-  content = escapeMhchem(content);
+  processedContent = escapeBrackets(processedContent);
+  processedContent = escapeMhchem(processedContent);
 
-  return content;
+  return processedContent;
 }
 
 export function escapeBrackets(text: string): string {
@@ -110,8 +110,10 @@ export function escapeBrackets(text: string): string {
     ): string => {
       if (codeBlock != null) {
         return codeBlock;
+      // biome-ignore lint/style/noUselessElse: <explanation>
       } else if (squareBracket != null) {
         return `$$${squareBracket}$$`;
+      // biome-ignore lint/style/noUselessElse: <explanation>
       } else if (roundBracket != null) {
         return `$${roundBracket}$`;
       }
@@ -136,9 +138,10 @@ export function renderCitations(
     return parts.map((part, index) => {
       const match = part.match(matchRegex);
       if (match) {
-        const number = parseInt(part.replace(/[\[\]]/g, ""), 10);
+        const number = Number.parseInt(part.replace(/[\[\]]/g, ""), 10);
         return (
           <CitationCircle
+            // biome-ignore lint/suspicious/noArrayIndexKey: <explanation>
             key={index}
             number={number}
             citation={citations[number - 1]}
@@ -157,7 +160,8 @@ export function renderCitations(
 
     if (Array.isArray(node)) {
       return node.map((child, index) => (
-        <React.Fragment key={index}>{processChildren(child)}</React.Fragment>
+        // biome-ignore lint/suspicious/noArrayIndexKey: <explanation>
+<React.Fragment key={index}>{processChildren(child)}</React.Fragment>
       ));
     }
 

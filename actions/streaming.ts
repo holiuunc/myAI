@@ -61,7 +61,7 @@ export async function handleOpenAIStream({
   if (!streamedResponse) {
     throw new Error("No stream response");
   }
-  let responseBuffer: string = "";
+  let responseBuffer = "";
 
   for await (const chunk of streamedResponse) {
     responseBuffer += chunk.choices[0]?.delta.content ?? "";
@@ -74,7 +74,7 @@ export async function handleOpenAIStream({
       },
     };
     controller.enqueue(
-      new TextEncoder().encode(JSON.stringify(streamedMessage) + "\n")
+      new TextEncoder().encode(`${JSON.stringify(streamedMessage)}\n`)
     );
   }
   const endTime = Date.now();
@@ -85,7 +85,7 @@ export async function handleOpenAIStream({
     final_message: responseBuffer,
   };
   controller.enqueue(
-    new TextEncoder().encode(JSON.stringify(donePayload) + "\n")
+    new TextEncoder().encode(`${JSON.stringify(donePayload)}\n`)
   );
   controller.close();
 }
@@ -99,14 +99,14 @@ export async function handleAnthropicStream({
   citations,
   temperature,
 }: QueueAssistantResponseParams) {
-  let anthropicClient: Anthropic = providers.anthropic;
-  let anthropicMessages: Anthropic.Messages.MessageParam[] = messages.map(
+  const anthropicClient: Anthropic = providers.anthropic;
+  const anthropicMessages: Anthropic.Messages.MessageParam[] = messages.map(
     (msg) => ({
       role: msg.role === "user" ? "user" : "assistant",
       content: msg.content,
     })
   );
-  let responseBuffer: string = "";
+  let responseBuffer = "";
   console.log("Streaming Anthropic response...", {
     temperature,
     model_name,
@@ -132,7 +132,7 @@ export async function handleAnthropicStream({
         },
       };
       controller.enqueue(
-        new TextEncoder().encode(JSON.stringify(streamedMessage) + "\n")
+        new TextEncoder().encode(`${JSON.stringify(streamedMessage)}\n`)
       );
     })
     .on("end", () => {
@@ -141,7 +141,7 @@ export async function handleAnthropicStream({
         final_message: responseBuffer,
       };
       controller.enqueue(
-        new TextEncoder().encode(JSON.stringify(donePayload) + "\n")
+        new TextEncoder().encode(`${JSON.stringify(donePayload)}\n`)
       );
       controller.close();
     });
@@ -205,7 +205,7 @@ export async function queueIndicator({
     },
   };
   controller.enqueue(
-    new TextEncoder().encode(JSON.stringify(loadingPayload) + "\n")
+    new TextEncoder().encode(`${JSON.stringify(loadingPayload)}\n`)
   );
 }
 
@@ -226,7 +226,7 @@ export async function queueError({
     },
   };
   controller.enqueue(
-    new TextEncoder().encode(JSON.stringify(errorPayload) + "\n")
+    new TextEncoder().encode(`${JSON.stringify(errorPayload)}\n`)
   );
   controller.close();
 }
