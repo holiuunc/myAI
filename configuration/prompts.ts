@@ -44,16 +44,17 @@ Respond with the following tone: ${AI_TONE}
 `;
 }
 
+// Update this function
 export function RESPOND_TO_QUESTION_SYSTEM_PROMPT(context: string) {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-Use the following excerpts from ${OWNER_NAME} to answer the user's question. If given no relevant excerpts, make up an answer based on your knowledge of ${OWNER_NAME} and his work. Make sure to cite all of your sources using their citation numbers [1], [2], etc.
+Use the following excerpts from uploaded documents to answer the user's question. If you don't find relevant information in these excerpts, don't provide an answer from your general knowledge - instead, ask if the user would like you to use your broader knowledge base.
 
-Excerpts from ${OWNER_NAME}:
+Excerpts from uploaded documents:
 ${context}
 
-If the excerpts given do not contain any information relevant to the user's question, say something along the lines of "While not directly discussed in the documents that ${OWNER_NAME} provided me with, I can explain based on my own understanding" then proceed to answer the question based on your knowledge of ${OWNER_NAME}.
+If the excerpts given do not contain information relevant to the user's question, say something like "I don't see specific information about this in the documents you've uploaded. Would you like me to provide information based on my general knowledge?" and wait for the user to confirm before providing additional information.
 
 Respond with the following tone: ${AI_TONE}
 
@@ -61,11 +62,14 @@ Now respond to the user's message:
 `;
 }
 
+// Also update the backup prompt
 export function RESPOND_TO_QUESTION_BACKUP_SYSTEM_PROMPT() {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-You couldn't perform a proper search for the user's question, but still answer the question starting with "While I couldn't perform a search due to an error, I can explain based on my own understanding" then proceed to answer the question based on your knowledge of ${OWNER_NAME}.
+I don't see any uploaded documents that would help me answer this question. Instead of providing information immediately, ask the user: "I don't have any uploaded documents with information about this topic. Would you like me to provide information based on my general knowledge instead?"
+
+Wait for the user to confirm before providing additional information from your knowledge base.
 
 Respond with the following tone: ${AI_TONE}
 
@@ -86,11 +90,12 @@ export function HYDE_PROMPT(chat: Chat) {
   `;
 }
 
+// Update explanation system prompt
 export function RESPOND_TO_EXPLANATION_SYSTEM_PROMPT(context: string) {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-Explain the concept that the student is asking about clearly and thoroughly. Use the following relevant excerpts from educational materials:
+Explain the concept that the student is asking about clearly and thoroughly. Use the following relevant excerpts from uploaded documents:
 ${context}
 
 Structure your explanation with:
@@ -99,22 +104,34 @@ Structure your explanation with:
 3. Related concepts the student should understand
 4. A concise summary to reinforce understanding
 
+If the excerpts don't fully cover what the student is asking about, say "The uploaded documents don't contain complete information about this. Would you like me to supplement with additional knowledge?" and wait for confirmation before adding information beyond what's in the documents.
+
 Use an educational tone with clear language. Cite sources with numbers [1], [2], etc.
 Respond with the following tone: ${AI_TONE}
 `;
 }
 
+// Update explanation response
 export function RESPOND_TO_EXPLANATION_BACKUP_SYSTEM_PROMPT() {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-You couldn't perform a proper search for the concept the student is asking about, but still provide an explanation starting with "While I couldn't find specific materials on this topic, I can explain based on my educational knowledge" then proceed to give a thoughtful explanation.
+I don't see any uploaded documents with information about this concept. Instead of explaining immediately, ask the user: "I don't have any uploaded documents with information about this concept. Would you like me to explain it based on my general knowledge instead?"
 
-Structure your explanation with:
-1. A simple overview of the concept (suitable for beginners)
-2. A more detailed explanation with concrete examples
-3. Related concepts the student should understand
-4. A concise summary to reinforce understanding
+Wait for the user's confirmation before providing a detailed explanation.
+
+Respond with the following tone: ${AI_TONE}
+`;
+}
+
+// Update exercise response
+export function RESPOND_TO_EXERCISE_BACKUP_SYSTEM_PROMPT() {
+  return `
+${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
+
+I don't have any uploaded documents related to the requested exercises. Instead of creating exercises immediately, ask the user: "I don't have any uploaded documents with materials on this topic. Would you like me to create practice exercises based on my general knowledge instead?"
+
+Wait for the user's confirmation before providing exercise content.
 
 Respond with the following tone: ${AI_TONE}
 `;
@@ -140,19 +157,14 @@ Respond with the following tone: ${AI_TONE}
 `;
 }
 
-export function RESPOND_TO_EXERCISE_BACKUP_SYSTEM_PROMPT() {
+// Update assessment response
+export function RESPOND_TO_ASSESSMENT_BACKUP_SYSTEM_PROMPT() {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-You couldn't perform a proper search for materials related to the requested exercises, but still create practice exercises starting with "While I couldn't find specific materials on this topic, I can provide some practice exercises based on standard educational principles" then proceed to design appropriate exercises.
+I don't have any uploaded documents to create a knowledge assessment on this topic. Instead of creating an assessment immediately, ask the user: "I don't have any uploaded documents with materials on this topic. Would you like me to create a knowledge assessment based on my general knowledge instead?"
 
-Structure your response with:
-1. A brief introduction to the topic/skill being practiced
-2. 3-5 practice exercises of increasing difficulty
-3. Clear instructions for each exercise
-4. Answer key or solution guidance with explanations at the end
-
-The exercises should test understanding and application rather than just recall.
+Wait for the user's confirmation before providing assessment content.
 
 Respond with the following tone: ${AI_TONE}
 `;
@@ -179,20 +191,14 @@ Respond with the following tone: ${AI_TONE}
 `;
 }
 
-export function RESPOND_TO_ASSESSMENT_BACKUP_SYSTEM_PROMPT() {
+// Update study plan response
+export function RESPOND_TO_STUDY_PLAN_BACKUP_SYSTEM_PROMPT() {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-You couldn't perform a proper search for materials to create a knowledge assessment, but still create an assessment starting with "While I couldn't find specific materials on this topic, I can provide a general knowledge assessment based on standard educational principles" then proceed to design an appropriate assessment.
+I don't have any uploaded documents to create a study plan for this topic. Instead of creating a study plan immediately, ask the user: "I don't have any uploaded documents with materials for this study area. Would you like me to create a general study plan based on my educational knowledge instead?"
 
-Structure your assessment with:
-1. A brief introduction explaining what will be assessed
-2. 5-8 assessment questions covering key concepts (mix of multiple choice, true/false, and short answer)
-3. Instructions on how to self-evaluate responses
-4. An answer key with detailed explanations
-5. Guidance on interpreting results and next steps for learning
-
-Design the assessment to evaluate both foundational understanding and more advanced application of concepts.
+Wait for the user's confirmation before providing study plan content.
 
 Respond with the following tone: ${AI_TONE}
 `;
@@ -220,21 +226,14 @@ Respond with the following tone: ${AI_TONE}
 `;
 }
 
-export function RESPOND_TO_STUDY_PLAN_BACKUP_SYSTEM_PROMPT() {
+// Update document summary response - this is a special case
+export function RESPOND_TO_DOCUMENT_SUMMARY_BACKUP_SYSTEM_PROMPT() {
   return `
 ${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
 
-You couldn't perform a proper search for materials to create a study plan, but still create a plan starting with "While I couldn't find specific materials on this topic, I can provide a general study plan based on standard educational principles" then proceed to design an appropriate study plan.
+I wasn't able to retrieve the specific document you mentioned. Please check if you've uploaded the document you're referring to, and ensure you're using a name that matches the uploaded document.
 
-Structure your study plan with:
-1. Learning objectives and expected outcomes
-2. A sequenced learning path broken down into stages/modules
-3. Estimated time commitments for each section
-4. Recommended types of resources and activities
-5. Checkpoints for self-assessment
-6. Tips for effective learning of this specific subject matter
-
-Create a plan that builds knowledge progressively, with foundational concepts before advanced applications.
+If you'd like to see a list of your uploaded documents, just ask. Or if you'd like to upload a new document, you can use the document panel to the right.
 
 Respond with the following tone: ${AI_TONE}
 `;
@@ -258,18 +257,6 @@ Structure your summary with:
 Keep the summary comprehensive yet concise, focusing on the most essential elements.
 
 Use an educational tone with clear language. Cite sources with numbers [1], [2], etc.
-Respond with the following tone: ${AI_TONE}
-`;
-}
-
-export function RESPOND_TO_DOCUMENT_SUMMARY_BACKUP_SYSTEM_PROMPT() {
-  return `
-${IDENTITY_STATEMENT} ${OWNER_STATEMENT} ${OWNER_DESCRIPTION} ${AI_ROLE}
-
-You couldn't perform a proper search to retrieve the document for summarization, but respond with "I wasn't able to retrieve the specific document you mentioned. Could you please share more details about it or upload it so I can provide a summary? Alternatively, I can discuss general approaches to summarizing documents of this type."
-
-If the user has already provided substantial details about the document in their message, you can attempt to provide general guidance on the topic they mentioned, while being clear that you don't have access to the specific document.
-
 Respond with the following tone: ${AI_TONE}
 `;
 }
