@@ -3,6 +3,7 @@ import Image from "next/image";
 import { Formatting } from "./formatting";
 import Loading from "./loading";
 import { AI_NAME } from "@/configuration/identity";
+import { useEffect, useRef, useCallback } from 'react';
 
 import type { DisplayMessage } from "@/types";
 import type { LoadingIndicator } from "@/types";
@@ -69,6 +70,16 @@ export default function ChatMessages({
   messages: DisplayMessage[];
   indicatorState: LoadingIndicator[];
 }) {
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+  
+  useEffect(() => {
+    scrollToBottom();
+  }, [scrollToBottom]);
+
   const showLoading =
     indicatorState.length > 0 &&
     messages.length > 0 &&
@@ -103,6 +114,7 @@ export default function ChatMessages({
       )}
       {showLoading && <Loading indicatorState={indicatorState} />}
       <div className="h-[225px]" />
+      <div ref={messagesEndRef} />
     </motion.div>
   );
 }
