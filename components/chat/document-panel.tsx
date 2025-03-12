@@ -28,6 +28,18 @@ export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelPr
     }
   };
 
+  const handleDelete = async (id: string) => {
+    try {
+      console.log(`Deleting document with ID: ${id}`);
+      await onDelete(id);
+      // You could add a toast notification here
+      console.log(`Document deleted successfully: ${id}`);
+    } catch (error) {
+      console.error(`Failed to delete document: ${error}`);
+      // Add error toast here
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-gray-50 border-l">
       <div className="h-4" />
@@ -73,9 +85,9 @@ export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelPr
                   <Button 
                     variant="ghost" 
                     size="sm"
-                    onClick={() => onDelete(doc.id)}
+                    onClick={() => handleDelete(doc.id)}
                     className="text-red-500 hover:text-red-700"
-                  >
+                    >
                     <Trash2 className="w-4 h-4" />
                   </Button>
                 </CardContent>

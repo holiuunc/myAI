@@ -113,21 +113,26 @@ export default function useApp() {
     }
   };
 
+  // Add or check this function in your hook
   const deleteDocument = async (id: string) => {
-    try {
-      const response = await fetch(`/api/documents/${id}`, {
-        method: "DELETE",
-      });
-      
-      if (response.ok) {
-        setDocuments((prev) => prev.filter(doc => doc.id !== id));
-      } else {
-        throw new Error("Delete failed");
-      }
-    } catch (error) {
-      console.error("Delete error:", error);
-      throw error;
+    console.log(`Hook: deleteDocument called with ID ${id}`);
+    
+    const response = await fetch(`/api/documents/${id}`, {
+      method: 'DELETE',
+    });
+    
+    console.log(`Delete API response status: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error(`API error: ${JSON.stringify(errorData)}`);
+      throw new Error(errorData.error || 'Failed to delete document');
     }
+    
+    // Update local state after successful deletion
+    setDocuments(prev => prev.filter(doc => doc.id !== id));
+    
+    return await response.json();
   };
 
   const addUserMessage = (input: string) => {

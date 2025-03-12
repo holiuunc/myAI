@@ -62,11 +62,27 @@ export async function processDocument(file: File): Promise<UploadedDocument> {
 }
 
 export async function deleteDocument(id: string): Promise<void> {
-  // Remove document metadata
-  documents = documents.filter(doc => doc.id !== id);
+  console.log(`Server: deleteDocument called with ID ${id}`);
   
-  // Remove document chunks from Pinecone
-  await deleteDocumentChunksFromPinecone(id);
+  try {
+    // First check if the document exists
+    const docIndex = documents.findIndex(doc => doc.id === id);
+    
+    if (docIndex === -1) {
+      console.log(`Document with ID ${id} not found`);
+      throw new Error(`Document with ID ${id} not found`);
+    }
+    
+    // Remove document metadata
+    documents = documents.filter(doc => doc.id !== id);
+    console.log(`Removed document metadata for ID ${id}`);
+    
+    // Remove document chunks from Pinecone
+    await deleteDocumentChunksFromPinecone(id);
+  } catch (error) {
+    console.error(`Error in deleteDocument: ${error}`);
+    throw error; // Re-throw to be handled by the API route
+  }
 }
 
 async function extractTextFromFile(file: File): Promise<string> {
@@ -181,15 +197,22 @@ async function deleteDocumentChunksFromPinecone(documentId: string): Promise<voi
   console.log(`Deleting chunks for document ${documentId} from Pinecone`);
   
   try {
+    // Validate Pinecone index
+    if (!pineconeIndex) {
+      console.error('Pinecone index is not initialized');
+      return;
+    }
+    
     // Delete all vectors with matching document ID
-    await pineconeIndex.deleteMany({
+    const deleteResponse = await pineconeIndex.deleteMany({
       filter: {
         source_url: { $eq: documentId },
       },
     });
-    console.log('Successfully deleted chunks from Pinecone');
+    
+    console.log(`Pinecone deletion response: ${JSON.stringify(deleteResponse)}`);
   } catch (error) {
-    console.error('Error deleting chunks from Pinecone:', error);
-    throw error;
+    console.error(`Error deleting chunks from Pinecone: ${error}`);
+    // Log but don't throw - continue with document deletion even if Pinecone fails
   }
 }

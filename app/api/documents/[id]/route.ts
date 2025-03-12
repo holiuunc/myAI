@@ -5,12 +5,19 @@ export async function DELETE(
   req: Request,
   { params }: { params: { id: string } }
 ) {
+  const id = params.id;
+  console.log(`API route: DELETE /api/documents/${id} called`);
+  
   try {
-    const id = params.id;
     await deleteDocument(id);
-    return NextResponse.json({ success: true });
+    console.log(`Successfully deleted document with ID: ${id}`);
+    return NextResponse.json({ success: true, id });
   } catch (error) {
-    console.error('Error deleting document:', error);
-    return NextResponse.json({ error: 'Failed to delete document' }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`API route error: ${errorMessage}`);
+    return NextResponse.json(
+      { error: `Failed to delete document: ${errorMessage}` }, 
+      { status: 500 }
+    );
   }
 }
