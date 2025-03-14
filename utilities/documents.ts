@@ -3,6 +3,7 @@ import { Pinecone } from '@pinecone-database/pinecone';
 import { PINECONE_INDEX_NAME, QUESTION_RESPONSE_TOP_K } from '@/configuration/pinecone';
 import { OpenAI } from 'openai';
 import { chunkSchema, type Chunk, type UploadedDocument } from '@/types';
+import { supabaseAdmin } from '@/configuration/supabase';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -15,15 +16,25 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
 });
 
-// In-memory storage for document metadata (replace with a database in production)
-let documents: UploadedDocument[] = [];
-
-export async function getDocuments(): Promise<UploadedDocument[]> {
-  return documents;
+// Update the getDocuments function to be user-specific
+export async function getDocuments(userId?: string): Promise<UploadedDocument[]> {
+  if (!userId) return [];
+  
+  const { data } = await supabaseAdmin
+    .from('documents')
+    .select('*')
+    .eq('user_id', userId);
+    
+  return data || [];
 }
 
-export async function processDocument(file: File): Promise<UploadedDocument> {
-  console.log(`Processing document: ${file.name}`);
+// Update the processDocument function to store user ID
+export async function processDocument(file: File, userId?: string): Promise<UploadedDocument> {
+  if (!userId) {
+    throw new Error("User must be logged in to upload documents");
+  }
+  
+  console.log(`Processing document: ${file.name} for user: ${userId}`);
   
   // Extract content from the file (PDF, DOCX, or TXT)
   const content = await extractTextFromFile(file);
@@ -40,12 +51,19 @@ export async function processDocument(file: File): Promise<UploadedDocument> {
     title: file.name,
     created_at: new Date().toISOString(),
     content,
+    user_id: userId,
   };
   
-  console.log(`Created document metadata with ID: ${document.id}`);
-  
-  // Store document metadata
-  documents.push(document);
+  // Store document in Supabase
+  await supabaseAdmin
+    .from('documents')
+    .insert([{
+      id: document.id,
+      title: document.title,
+      content: document.content,
+      user_id: userId,
+      created_at: document.created_at
+    }]);
   
   // Process document for RAG
   try {
@@ -61,20 +79,31 @@ export async function processDocument(file: File): Promise<UploadedDocument> {
   return document;
 }
 
-export async function deleteDocument(id: string, forceDelete = false): Promise<void> {
-  console.log(`Server: deleteDocument called with ID ${id} (forceDelete: ${forceDelete})`);
+// Update the deleteDocument function to check user ownership
+export async function deleteDocument(id: string, userId: string, forceDelete = false): Promise<void> {
+  console.log(`Server: deleteDocument called with ID ${id} for user ${userId} (forceDelete: ${forceDelete})`);
   
   try {
-    // First check if the document exists
-    const docIndex = documents.findIndex(doc => doc.id === id);
+    // Check if document exists and belongs to user
+    const { data: doc } = await supabaseAdmin
+      .from('documents')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
     
-    if (docIndex === -1) {
-      console.log(`Document with ID ${id} not found`);
-      throw new Error(`Document with ID ${id} not found`);
+    if (!doc) {
+      console.log(`Document with ID ${id} not found or doesn't belong to user ${userId}`);
+      throw new Error(`Document with ID ${id} not found or doesn't belong to you`);
     }
     
-    // Always remove document metadata
-    documents = documents.filter(doc => doc.id !== id);
+    // Delete from Supabase
+    await supabaseAdmin
+      .from('documents')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+      
     console.log(`Removed document metadata for ID ${id}`);
     
     // Only attempt to remove from Pinecone if not force deleting

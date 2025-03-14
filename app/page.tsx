@@ -1,11 +1,16 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import ChatInput from "@/components/chat/input";
 import ChatMessages from "@/components/chat/messages";
 import useApp from "@/hooks/use-app";
 import ChatHeader from "@/components/chat/header";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { DocumentPanel } from "@/components/chat/document-panel";
+import { useAuth } from "@/hooks/use-auth";
+import { LoginModal } from "@/components/auth/login-modal";
+import { Button } from "@/components/ui/button";
+import fetchDocuments from "@/hooks/use-app";
 
 export default function Chat() {
   const {
@@ -21,19 +26,40 @@ export default function Chat() {
     deleteDocument,
   } = useApp();
 
+  const { user, logout } = useAuth();
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+
   const handleDeleteDocument = async (id: string, force = false) => {
     try {
-      // Use the deleteDocument function from your useApp hook
       await deleteDocument(id, force);
     } catch (error) {
       console.error("Failed to delete document:", error);
-      throw error;  // Re-throw to be handled by document panel
+      throw error;
     }
   };
 
+  useEffect(() => {
+    // When user changes, refresh documents list
+    if (user) {
+      // If you have a fetchDocuments function in your useApp hook:
+      // This will trigger document fetching when the user logs in
+      const loadDocuments = async () => {
+        if (typeof fetchDocuments === 'function') {
+          await fetchDocuments();
+        }
+      };
+      loadDocuments();
+    }
+  }, [user]);
+
   return (
     <>
-      <ChatHeader clearMessages={clearMessages} />
+      <ChatHeader 
+        clearMessages={clearMessages} 
+        user={user} 
+        onLoginClick={() => setLoginModalOpen(true)}
+        onLogoutClick={logout}
+      />
       <div className="flex justify-center items-center h-screen pt-16 pb-24">
         <div className="flex flex-col max-w-screen-xl w-full h-full">
           <ResizablePanelGroup direction="horizontal" className="h-full">
@@ -44,11 +70,25 @@ export default function Chat() {
             </ResizablePanel>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize={25} minSize={20}>
-              <DocumentPanel 
-                documents={documents} 
-                onUpload={uploadDocument} 
-                onDelete={handleDeleteDocument}
-              />
+              {user ? (
+                <DocumentPanel 
+                  documents={documents} 
+                  onUpload={uploadDocument} 
+                  onDelete={handleDeleteDocument}
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center p-8">
+                    <h2 className="text-xl font-medium mb-4">Sign in to manage documents</h2>
+                    <p className="text-gray-500 mb-6">
+                      Sign in to upload and interact with your documents
+                    </p>
+                    <Button onClick={() => setLoginModalOpen(true)}>
+                      Sign in with Email
+                    </Button>
+                  </div>
+                </div>
+              )}
             </ResizablePanel>
           </ResizablePanelGroup>
         </div>
@@ -59,6 +99,7 @@ export default function Chat() {
         input={input}
         isLoading={isLoading}
       />
+      <LoginModal isOpen={loginModalOpen} onClose={() => setLoginModalOpen(false)} />
     </>
   );
 }

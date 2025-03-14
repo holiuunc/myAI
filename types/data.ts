@@ -5,6 +5,7 @@ export const uploadedDocumentSchema = z.object({
   title: z.string(),
   created_at: z.string(),
   content: z.string(),
+  user_id: z.string(),
 });
 export type UploadedDocument = z.infer<typeof uploadedDocumentSchema>;
 

@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 "use client";
 
 import { useEffect, useState } from "react";
@@ -15,6 +16,7 @@ import type {
 } from "@/types";
 
 import { streamedDoneSchema, streamedMessageSchema, streamedLoadingSchema, streamedErrorSchema } from "@/types/streaming";
+import { useAuth } from "@/hooks/use-auth";
 
 export default function useApp() {
   const initialAssistantMessage: DisplayMessage = {
@@ -31,6 +33,7 @@ export default function useApp() {
   const [indicatorState, setIndicatorState] = useState<LoadingIndicator[]>([]);
   const [input, setInput] = useState("");
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
+  const { user } = useAuth();
 
   useEffect(() => {
     setWordCount(
@@ -77,6 +80,11 @@ export default function useApp() {
   }, [documents]);
 
   const fetchDocuments = async () => {
+    if (!user) {
+      setDocuments([]);
+      return;
+    }
+    
     try {
       const response = await fetch("/api/documents");
       if (response.ok) {
@@ -87,6 +95,23 @@ export default function useApp() {
       console.error("Failed to fetch documents:", error);
     }
   };
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  useEffect(() => {
+    fetchDocuments();
+  }, [user]);
+
+  // Inside useApp hook
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+    useEffect(() => {
+    // Refetch documents when auth state changes
+    if (user) {
+      fetchDocuments();
+    } else {
+      // Clear documents when logged out
+      setDocuments([]);
+    }
+  }, [user?.id]); // Depend on user.id instead of the whole user object
 
   const uploadDocument = async (file: File) => {
     const formData = new FormData();
@@ -115,26 +140,28 @@ export default function useApp() {
 
   // In your useApp hook
   const deleteDocument = async (id: string, force = false) => {
-    console.log(`Hook: deleteDocument called with ID ${id}, force: ${force}`);
-    
-    const url = force ? `/api/documents/${id}?force=true` : `/api/documents/${id}`;
-    
-    const response = await fetch(url, {
-      method: 'DELETE',
-    });
-    
-    console.log(`Delete API response status: ${response.status}`);
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error(`API error: ${JSON.stringify(errorData)}`);
-      throw new Error(errorData.error || 'Failed to delete document');
+    try {
+      const response = await fetch(`/api/documents/${id}${force ? '?force=true' : ''}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.status === 401) {
+        // User not authenticated, trigger login modal or redirect
+        return false;
+      }
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to delete document');
+      }
+      
+      // Refresh document list after successful deletion
+      await fetchDocuments();
+      return true;
+    } catch (error) {
+      console.error("Failed to delete document:", error);
+      throw error;
     }
-    
-    // Update local state
-    setDocuments(prev => prev.filter(doc => doc.id !== id));
-    
-    return await response.json();
   };
 
   const addUserMessage = (input: string) => {
