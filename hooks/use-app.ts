@@ -48,15 +48,6 @@ export default function useApp(externalUser?: User) {
     );
   }, [messages]);
 
-  // DELETED useEffect(() => {
-  //   // Save messages to local storage whenever they change
-  //   if (messages.length > 1) {
-  //     localStorage.setItem("chatMessages", JSON.stringify(messages));
-  //   } else {
-  //     localStorage.removeItem("chatMessages");
-  //   }
-  // }, [messages]);
-
   // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
     // Update document localStorage to be user-specific
@@ -83,17 +74,6 @@ export default function useApp(externalUser?: User) {
       console.error("Error fetching documents:", error);
     }
   };
-
-  // DELETED // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
-  //   useEffect(() => {
-  //   // Refetch documents when auth state changes
-  //   if (user) {
-  //     fetchDocuments();
-  //   } else {
-  //     // Clear documents when logged out
-  //     setDocuments([]);
-  //   }
-  // }, [user?.id]); // Depend on user.id instead of the whole user object
 
   const uploadDocument = async (file: File) => {
     const formData = new FormData();
@@ -320,14 +300,6 @@ export default function useApp(externalUser?: User) {
     setInput(e.target.value);
   };
 
-  // DELETED useEffect(() => {
-  //   // Load messages from local storage when component mounts
-  //   const storedMessages = localStorage.getItem("chatMessages");
-  //   if (storedMessages) {
-  //     setMessages(JSON.parse(storedMessages));
-  //   }
-  // }, []);
-
   useEffect(() => {
     if (!user) return;
     
@@ -361,9 +333,103 @@ export default function useApp(externalUser?: User) {
     }
   }, [user?.id]);
 
-  const clearMessages = () => {
-    setMessages([]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  useEffect(() => {
+    if (user) {
+      fetchMessages();
+    } else {
+      setMessages([initialAssistantMessage]);
+    }
+  }, [user?.id]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  useEffect(() => {
+    if (!user || messages.length <= 1) return;
+    
+    // Use debounce with a longer delay (3-5 seconds)
+    const saveTimeout = setTimeout(() => {
+      saveMessages(messages);
+    }, 5000); // Increased from 1000ms to 5000ms
+    
+    return () => clearTimeout(saveTimeout);
+  }, [messages, user?.id]);
+
+  // Add this effect to save on unmount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+    useEffect(() => {
+    // Save when component unmounts (user navigates away or closes tab)
+    return () => {
+      if (user && messages.length > 1) {
+        saveMessages(messages);
+      }
+    };
+  }, []);
+
+  const clearMessages = async () => {
+    setMessages([initialAssistantMessage]);
+    
+    if (user) {
+      try {
+        await fetch('/api/chats', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ messages: [initialAssistantMessage] }),
+        });
+      } catch (error) {
+        console.error("Error clearing messages on server:", error);
+      }
+    }
+    
     setWordCount(0);
+  };
+
+  // Load messages from server
+  const fetchMessages = async () => {
+    if (!user) return;
+    
+    try {
+      const response = await fetch('/api/chats');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.messages && data.messages.length > 0) {
+          setMessages(data.messages);
+        } else {
+          setMessages([initialAssistantMessage]);
+        }
+      } else if (response.status !== 404) {
+        throw new Error(`Error: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      // Fallback to localStorage if server request fails
+      const storageKey = `chatMessages-${user.id}`;
+      const storedMessages = localStorage.getItem(storageKey);
+      if (storedMessages) {
+        setMessages(JSON.parse(storedMessages));
+      }
+    }
+  };
+
+  // Save messages to server
+  const saveMessages = async (messagesToSave: DisplayMessage[]) => {
+    if (!user) return;
+    
+    try {
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ messages: messagesToSave }),
+      });
+    } catch (error) {
+      console.error("Error saving messages to server:", error);
+      // Fallback to localStorage if server request fails
+      const storageKey = `chatMessages-${user.id}`;
+      localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
+    }
   };
 
   return {

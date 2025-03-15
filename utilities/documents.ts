@@ -60,9 +60,11 @@ export async function processDocument(file: File, userId?: string): Promise<Uplo
     .insert([{
       id: document.id,
       title: document.title,
-      content: document.content,
       user_id: userId,
-      created_at: document.created_at
+      created_at: document.created_at,
+      file_type: file.type,
+      status: 'complete',
+      vector_count: 0 // Initial count, update after processing if needed
     }]);
   
   // Process document for RAG

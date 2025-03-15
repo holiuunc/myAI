@@ -89,12 +89,33 @@ export async function POST(request: Request) {
       }
     }
     
-    // Create session
-    console.log("Creating session for user:", user.id);
-    const sessionId = uuidv4();
+    // Check for existing valid session
+    const { data: existingSession } = await supabaseAdmin
+      .from('sessions')
+      .select('id')
+      .eq('user_id', user.id)
+      .gt('expires_at', new Date().toISOString())
+      .order('expires_at', { ascending: false })
+      .limit(1);
     
-    try {
-      const { error } = await supabaseAdmin
+    // biome-ignore lint/suspicious/noImplicitAnyLet: <explanation>
+    let sessionId;
+    
+    if (existingSession && existingSession.length > 0) {
+      // Update existing session expiry
+      sessionId = existingSession[0].id;
+      await supabaseAdmin
+        .from('sessions')
+        .update({
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+        })
+        .eq('id', sessionId);
+        
+      console.log("Existing session updated:", sessionId);
+    } else {
+      // Create new session
+      sessionId = uuidv4();
+      await supabaseAdmin
         .from('sessions')
         .insert([{
           id: sessionId,
@@ -102,30 +123,20 @@ export async function POST(request: Request) {
           expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
         }]);
         
-      if (error) {
-        console.error("Session creation error:", error);
-        throw error;
-      }
-      
-      console.log("Session created successfully");
-    } catch (e) {
-      console.error("Session creation failed:", e);
-      return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
+      console.log("New session created:", sessionId);
     }
     
-    // Set cookie
-    try {
-      cookies().set('session_id', sessionId, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 60 * 60 * 24 * 7,
-        path: '/',
-      });
-      console.log("Session cookie set");
-    } catch (e) {
-      console.error("Cookie setting failed:", e);
-      // Continue anyway since the session is created in the database
-    }
+    // Set cookie with correct settings for your environment
+    cookies().set('session_id', sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax', // Changed from strict for better compatibility
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7 // 7 days
+    });
+
+    // In login route
+    console.log("Setting session cookie:", sessionId);
     
     console.log("Login response data:", { sessionId, user });
     return NextResponse.json({ success: true, user: { id: user.id, email: user.email } });
