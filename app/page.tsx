@@ -10,7 +10,6 @@ import { DocumentPanel } from "@/components/chat/document-panel";
 import { useAuth } from "@/hooks/use-auth";
 import { LoginModal } from "@/components/auth/login-modal";
 import { Button } from "@/components/ui/button";
-import fetchDocuments from "@/hooks/use-app";
 
 export default function Chat() {
   const {
@@ -38,22 +37,16 @@ export default function Chat() {
     }
   };
 
-  useEffect(() => {
-    // When user changes, refresh documents list
-    if (user) {
-      // If you have a fetchDocuments function in your useApp hook:
-      // This will trigger document fetching when the user logs in
-      const loadDocuments = async () => {
-        if (typeof fetchDocuments === 'function') {
-          await fetchDocuments();
-        }
-      };
-      loadDocuments();
-    }
-  }, [user]);
+  // Add this console log
+  console.log("Rendering Chat component, user state:", user);
 
   return (
     <>
+      {/* This will show before the panel as a debug measure */}
+      {user && <div style={{position: 'absolute', top: 0, right: 0, background: '#eee', padding: '5px', fontSize: '10px'}}>
+        Logged in as: {user.email}
+      </div>}
+
       <ChatHeader 
         clearMessages={clearMessages} 
         user={user} 

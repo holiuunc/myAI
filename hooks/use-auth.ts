@@ -53,9 +53,8 @@ export function useAuth() {
       // Set the user state
       setUser(data.user);
       
-      // Force refresh documents after login
-      // You can also put this in the main component's useEffect
-      window.location.reload(); // Simple but effective solution
+      // Force a more complete UI refresh
+      window.location.reload();
       
       return data.user;
     } catch (error) {

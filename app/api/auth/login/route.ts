@@ -127,6 +127,7 @@ export async function POST(request: Request) {
       // Continue anyway since the session is created in the database
     }
     
+    console.log("Login response data:", { sessionId, user });
     return NextResponse.json({ success: true, user: { id: user.id, email: user.email } });
   } catch (error) {
     console.error("Unhandled login error:", error);

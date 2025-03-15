@@ -328,14 +328,30 @@ export default function useApp() {
     }
   }, []);
 
-  // useEffect(() => {
-  //   // Save messages to local storage whenever they change
-  //   if (messages.length > 1) {
-  //     localStorage.setItem("chatMessages", JSON.stringify(messages));
-  //   } else {
-  //     localStorage.removeItem("chatMessages");
-  //   }
-  // }, [messages]);
+  // Update localStorage keys to include user ID
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  useEffect(() => {
+    if (!user) return;
+    
+    const storageKey = `chatMessages-${user.id}`;
+    const storedMessages = localStorage.getItem(storageKey);
+    if (storedMessages) {
+      setMessages(JSON.parse(storedMessages));
+    } else {
+      setMessages([initialAssistantMessage]);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    
+    const storageKey = `chatMessages-${user.id}`;
+    if (messages.length > 1) {
+      localStorage.setItem(storageKey, JSON.stringify(messages));
+    } else {
+      localStorage.removeItem(storageKey);
+    }
+  }, [messages, user]);
 
   const clearMessages = () => {
     setMessages([]);
