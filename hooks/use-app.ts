@@ -16,9 +16,14 @@ import type {
 } from "@/types";
 
 import { streamedDoneSchema, streamedMessageSchema, streamedLoadingSchema, streamedErrorSchema } from "@/types/streaming";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, type User } from "@/hooks/use-auth";
 
-export default function useApp() {
+// In hooks/use-app.ts, modify the hook signature
+export default function useApp(externalUser?: User) {
+  // In the hook, use the external user if provided
+  const authHook = useAuth();
+  const user = externalUser || authHook.user;
+  
   const initialAssistantMessage: DisplayMessage = {
     role: "assistant",
     content: INITIAL_MESSAGE,
@@ -33,7 +38,6 @@ export default function useApp() {
   const [indicatorState, setIndicatorState] = useState<LoadingIndicator[]>([]);
   const [input, setInput] = useState("");
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
-  const { user } = useAuth();
 
   useEffect(() => {
     setWordCount(
@@ -44,74 +48,52 @@ export default function useApp() {
     );
   }, [messages]);
 
+  // DELETED useEffect(() => {
+  //   // Save messages to local storage whenever they change
+  //   if (messages.length > 1) {
+  //     localStorage.setItem("chatMessages", JSON.stringify(messages));
+  //   } else {
+  //     localStorage.removeItem("chatMessages");
+  //   }
+  // }, [messages]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
-    // Load messages from local storage when component mounts
-    const storedMessages = localStorage.getItem("chatMessages");
-    if (storedMessages) {
-      setMessages(JSON.parse(storedMessages));
-    }
+    // Update document localStorage to be user-specific
+    if (!user) return;
     
-    // Load documents from local storage
-    const storedDocuments = localStorage.getItem("uploadedDocuments");
-    if (storedDocuments) {
-      setDocuments(JSON.parse(storedDocuments));
-    } else {
-      // Fetch documents from API
-      fetchDocuments();
-    }
-  }, []);
-
-  useEffect(() => {
-    // Save messages to local storage whenever they change
-    if (messages.length > 1) {
-      localStorage.setItem("chatMessages", JSON.stringify(messages));
-    } else {
-      localStorage.removeItem("chatMessages");
-    }
-  }, [messages]);
-
-  useEffect(() => {
-    // Save documents to local storage whenever they change
     if (documents.length > 0) {
-      localStorage.setItem("uploadedDocuments", JSON.stringify(documents));
+      localStorage.setItem(`documents-${user.id}`, JSON.stringify(documents));
     } else {
-      localStorage.removeItem("uploadedDocuments");
+      localStorage.removeItem(`documents-${user.id}`);
     }
-  }, [documents]);
+  }, [documents, user?.id]);
 
   const fetchDocuments = async () => {
-    if (!user) {
-      setDocuments([]);
-      return;
-    }
+    if (!user) return;
     
     try {
+      // Fetch from API passing the user ID
       const response = await fetch("/api/documents");
       if (response.ok) {
         const data = await response.json();
-        setDocuments(data.documents);
+        setDocuments(data.documents || []);
       }
     } catch (error) {
-      console.error("Failed to fetch documents:", error);
+      console.error("Error fetching documents:", error);
     }
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
-  useEffect(() => {
-    fetchDocuments();
-  }, [user]);
-
-  // Inside useApp hook
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
-    useEffect(() => {
-    // Refetch documents when auth state changes
-    if (user) {
-      fetchDocuments();
-    } else {
-      // Clear documents when logged out
-      setDocuments([]);
-    }
-  }, [user?.id]); // Depend on user.id instead of the whole user object
+  // DELETED // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  //   useEffect(() => {
+  //   // Refetch documents when auth state changes
+  //   if (user) {
+  //     fetchDocuments();
+  //   } else {
+  //     // Clear documents when logged out
+  //     setDocuments([]);
+  //   }
+  // }, [user?.id]); // Depend on user.id instead of the whole user object
 
   const uploadDocument = async (file: File) => {
     const formData = new FormData();
@@ -185,19 +167,37 @@ export default function useApp() {
   };
 
   const fetchAssistantResponse = async (allMessages: DisplayMessage[]) => {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ chat: { messages: allMessages } }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Failed to send message");
+    try {
+      // Get userId from the passed user parameter
+      const userId = user?.id;
+      
+      if (!userId) {
+        throw new Error("User not authenticated");
+      }
+  
+      const response = await fetch("/api/chat", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chat: {
+            messages: allMessages,
+            userId, // Include the userId in the chat object
+          },
+        }),
+      });
+  
+      if (!response.ok) {
+        throw new Error(`Error: ${response.statusText}`);
+      }
+  
+      // Don't parse JSON here - just return the response for streaming
+      return response;
+    } catch (error) {
+      console.error('Error in fetchAssistantResponse:', error);
+      throw error;
     }
-
-    return response;
   };
 
   const handleStreamedMessage = (streamedMessage: StreamedMessage) => {
@@ -320,27 +320,13 @@ export default function useApp() {
     setInput(e.target.value);
   };
 
-  useEffect(() => {
-    // Load messages from local storage when component mounts
-    const storedMessages = localStorage.getItem("chatMessages");
-    if (storedMessages) {
-      setMessages(JSON.parse(storedMessages));
-    }
-  }, []);
-
-  // Update localStorage keys to include user ID
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
-  useEffect(() => {
-    if (!user) return;
-    
-    const storageKey = `chatMessages-${user.id}`;
-    const storedMessages = localStorage.getItem(storageKey);
-    if (storedMessages) {
-      setMessages(JSON.parse(storedMessages));
-    } else {
-      setMessages([initialAssistantMessage]);
-    }
-  }, [user]);
+  // DELETED useEffect(() => {
+  //   // Load messages from local storage when component mounts
+  //   const storedMessages = localStorage.getItem("chatMessages");
+  //   if (storedMessages) {
+  //     setMessages(JSON.parse(storedMessages));
+  //   }
+  // }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -352,6 +338,28 @@ export default function useApp() {
       localStorage.removeItem(storageKey);
     }
   }, [messages, user]);
+
+  // Update the initial loading effect
+  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  useEffect(() => {
+    if (user) {
+      // Always fetch fresh documents from API first
+      fetchDocuments();
+      
+      // Then load any cached messages for this user
+      const storageKey = `chatMessages-${user.id}`;
+      const storedMessages = localStorage.getItem(storageKey);
+      if (storedMessages) {
+        setMessages(JSON.parse(storedMessages));
+      } else {
+        setMessages([initialAssistantMessage]);
+      }
+    } else {
+      // Reset to initial state when logged out
+      setMessages([initialAssistantMessage]);
+      setDocuments([]);
+    }
+  }, [user?.id]);
 
   const clearMessages = () => {
     setMessages([]);

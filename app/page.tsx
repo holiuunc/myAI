@@ -12,6 +12,7 @@ import { LoginModal } from "@/components/auth/login-modal";
 import { Button } from "@/components/ui/button";
 
 export default function Chat() {
+  const { user, logout } = useAuth();
   const {
     messages,
     handleInputChange,
@@ -23,9 +24,8 @@ export default function Chat() {
     documents,
     uploadDocument,
     deleteDocument,
-  } = useApp();
+  } = useApp(user || undefined); // Pass user to useApp
 
-  const { user, logout } = useAuth();
   const [loginModalOpen, setLoginModalOpen] = useState(false);
 
   const handleDeleteDocument = async (id: string, force = false) => {

@@ -5,6 +5,7 @@ import { IntentionModule } from "@/modules/intention";
 import { ResponseModule } from "@/modules/response";
 import { PINECONE_INDEX_NAME } from "@/configuration/pinecone";
 import Anthropic from "@anthropic-ai/sdk";
+import { NextResponse } from "next/server";
 
 export const maxDuration = 60;
 
@@ -57,23 +58,33 @@ export async function POST(req: Request) {
 
   const intention: Intention = await determineIntention(chat);
 
+  // Extract userId from the request (assuming you have authentication middleware)
+  const userId = chat.userId; // Make sure this exists in your chat object
+  
+  if (!userId) {
+    return NextResponse.json({ error: "User authentication required" }, { status: 401 });
+  }
+  
+  // Create a namespaced index specific to this user
+  const userPineconeIndex = pineconeIndex.namespace(userId);
+
   switch (intention.type) {
     case "hostile_message":
       return ResponseModule.respondToHostileMessage(chat, providers);
     case "random":
       return ResponseModule.respondToRandomMessage(chat, providers);
     case "question":
-      return ResponseModule.respondToQuestion(chat, providers, pineconeIndex);
+      return ResponseModule.respondToQuestion(chat, providers, userPineconeIndex);
     case "explanation_request":
-      return ResponseModule.respondToExplanationRequest(chat, providers, pineconeIndex);
+      return ResponseModule.respondToExplanationRequest(chat, providers, userPineconeIndex);
     case "exercise_request":
-      return ResponseModule.respondToExerciseRequest(chat, providers, pineconeIndex);
+      return ResponseModule.respondToExerciseRequest(chat, providers, userPineconeIndex);
     case "knowledge_assessment":
-      return ResponseModule.respondToKnowledgeAssessment(chat, providers, pineconeIndex);
+      return ResponseModule.respondToKnowledgeAssessment(chat, providers, userPineconeIndex);
     case "study_plan_request":
-      return ResponseModule.respondToStudyPlanRequest(chat, providers, pineconeIndex);
+      return ResponseModule.respondToStudyPlanRequest(chat, providers, userPineconeIndex);
     case "document_summary_request":
-      return ResponseModule.respondToDocumentSummaryRequest(chat, providers, pineconeIndex);
+      return ResponseModule.respondToDocumentSummaryRequest(chat, providers, userPineconeIndex);
     default:
       return ResponseModule.respondToRandomMessage(chat, providers);
   }

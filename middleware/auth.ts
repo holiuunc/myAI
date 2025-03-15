@@ -22,9 +22,8 @@ export async function getAuthenticatedUser() {
       return null;
     }
     
-    // Get user data - FIXED: Use profiles not users
     const { data: user } = await supabaseAdmin
-      .from('profiles')  // Changed from 'users' to 'profiles'
+      .from('profiles')
       .select('id, email')
       .eq('id', session.user_id)
       .single();

@@ -109,8 +109,8 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
     // Only attempt to remove from Pinecone if not force deleting
     if (!forceDelete) {
       try {
-        // Remove document chunks from Pinecone
-        await deleteDocumentChunksFromPinecone(id);
+        // Pass the userId here!
+        await deleteDocumentChunksFromPinecone(id, userId);
       } catch (pineconeError) {
         console.error(`Error deleting from Pinecone: ${pineconeError}`);
         // Only throw if not force deleting
@@ -151,7 +151,12 @@ async function extractTextFromFile(file: File): Promise<string> {
 
 async function processDocumentForRAG(document: UploadedDocument): Promise<void> {
   // 1. Split document into chunks
-  const chunks = splitIntoChunks(document.content, document.id, document.title);
+  const chunks = splitIntoChunks(
+    document.content, 
+    document.id, 
+    document.title,
+    document.user_id // Pass user ID to chunks
+  );
   
   // 2. Generate embeddings for each chunk
   const embeddedChunks = await generateEmbeddings(chunks);
@@ -161,7 +166,7 @@ async function processDocumentForRAG(document: UploadedDocument): Promise<void> 
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-export function splitIntoChunks(content: string, documentId: string, documentTitle: string, chunkSize = 1000, overlap = 200): any[] {
+export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 1000, overlap = 200): any[] {
   const chunks = [];
   let i = 0;
   
@@ -177,6 +182,7 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
       source_url: documentId,
       source_description: documentTitle,
       order: Math.floor(i / chunkSize),
+      user_id: userId, // Store userId with each chunk
     });
     
     i += chunkSize - overlap;
@@ -218,40 +224,63 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
       source_url: chunk.source_url,
       source_description: chunk.source_description,
       order: chunk.order,
+      user_id: chunk.user_id, // Ensure user_id is in metadata for filtering
     },
   }));
   
-  // Upsert in batches of 100
+  // Extract userId from the first chunk (they all have same user)
+  const userId = embeddedChunks[0].user_id;
+  
+  // Get namespace-specific index (like in getRelatedDocuments function)
+  const namespaceIndex = pineconeIndex.namespace(userId);
+  
+  // Upsert in batches of 100, using user's ID as namespace
   const batchSize = 100;
   for (let i = 0; i < vectors.length; i += batchSize) {
     const batch = vectors.slice(i, i + batchSize);
-    console.log(`Upserting batch ${i/batchSize + 1} to Pinecone`);
-    await pineconeIndex.upsert(batch);
+    console.log(`Upserting batch ${i/batchSize + 1} to Pinecone in namespace: ${userId}`);
+    await namespaceIndex.upsert(batch);
   }
   
   console.log('Successfully stored chunks in Pinecone');
 }
 
-async function deleteDocumentChunksFromPinecone(documentId: string): Promise<void> {
-  console.log(`Deleting chunks for document ${documentId} from Pinecone`);
+async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
+  console.log(`Deleting chunks for document ${documentId} from Pinecone namespace: ${userId}`);
   
-  try {
-    // Validate Pinecone index
-    if (!pineconeIndex) {
-      console.error('Pinecone index is not initialized');
-      return;
-    }
-    
-    // Delete all vectors with matching document ID
-    const deleteResponse = await pineconeIndex.deleteMany({
-      filter: {
-        source_url: { $eq: documentId },
-      },
-    });
-    
-    console.log(`Pinecone deletion response: ${JSON.stringify(deleteResponse)}`);
-  } catch (error) {
-    console.error(`Error deleting chunks from Pinecone: ${error}`);
-    // Log but don't throw - continue with document deletion even if Pinecone fails
-  }
+  // Get namespace-specific index (consistent with other functions)
+  const namespaceIndex = pineconeIndex.namespace(userId);
+  
+  // Delete by query, using the namespace-specific index
+  await namespaceIndex.deleteMany({
+    filter: { source_url: documentId }
+    // No namespace parameter needed here
+  });
+}
+
+// Add this function for single embeddings
+async function generateEmbedding(text: string): Promise<number[]> {
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-ada-002',
+    input: text,
+  });
+  
+  return response.data[0].embedding;
+}
+
+// Then update the getRelatedDocuments function
+export async function getRelatedDocuments(question: string, userId: string) {
+  const embedding = await generateEmbedding(question);
+  
+  // Use the namespace-specific index
+  const namespaceIndex = pineconeIndex.namespace(userId);
+  
+  // Query using namespace-specific index (no need for namespace parameter)
+  const results = await namespaceIndex.query({
+    vector: embedding,
+    topK: QUESTION_RESPONSE_TOP_K,
+    includeMetadata: true
+  });
+  
+  return results.matches;
 }

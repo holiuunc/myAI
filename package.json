@@ -12,7 +12,7 @@
     "@ai-sdk/openai": "^0.0.66",
     "@anthropic-ai/sdk": "^0.33.1",
     "@hookform/resolvers": "^3.9.0",
-    "@pinecone-database/pinecone": "^3.0.3",
+    "@pinecone-database/pinecone": "^5.1.1",
     "@radix-ui/react-accordion": "^1.2.1",
     "@radix-ui/react-alert-dialog": "^1.1.2",
     "@radix-ui/react-aspect-ratio": "^1.1.0",
