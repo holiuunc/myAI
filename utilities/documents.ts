@@ -4,6 +4,7 @@ import { PINECONE_INDEX_NAME, QUESTION_RESPONSE_TOP_K } from '@/configuration/pi
 import { OpenAI } from 'openai';
 import { chunkSchema, type Chunk, type UploadedDocument } from '@/types';
 import { supabaseAdmin } from '@/configuration/supabase';
+import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -15,6 +16,10 @@ const pineconeIndex = pineconeClient.Index(PINECONE_INDEX_NAME);
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
 });
+
+// Queue to track documents being processed
+// In a production app, replace with a more robust solution like Redis or a database table
+const processingQueue = new Map<string, boolean>();
 
 // Update the getDocuments function to be user-specific
 export async function getDocuments(userId?: string): Promise<UploadedDocument[]> {
@@ -28,15 +33,27 @@ export async function getDocuments(userId?: string): Promise<UploadedDocument[]>
   return data || [];
 }
 
-// Update the processDocument function to store user ID
-export async function processDocument(file: File, userId?: string): Promise<UploadedDocument> {
+// First phase: Quickly validate and store the document metadata
+export async function uploadDocument(file: File, userId?: string): Promise<UploadedDocument> {
   if (!userId) {
     throw new Error("User must be logged in to upload documents");
   }
   
-  console.log(`Processing document: ${file.name} for user: ${userId}`);
+  console.log(`Uploading document: ${file.name} for user: ${userId}`);
+  
+  // Validate file size
+  const maxFileSizeBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+  if (file.size > maxFileSizeBytes) {
+    throw new Error(`File exceeds maximum size of ${MAX_FILE_SIZE_MB}MB`);
+  }
+  
+  // Validate file type
+  if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+    throw new Error(`File type '${file.type}' not supported. Please upload PDF, DOCX, or text files.`);
+  }
   
   // Extract content from the file (PDF, DOCX, or TXT)
+  // Note: We still need to do this synchronously for now to validate the file content
   const content = await extractTextFromFile(file);
   console.log(`Extracted ${content.length} characters from file`);
 
@@ -46,12 +63,15 @@ export async function processDocument(file: File, userId?: string): Promise<Uplo
   }
   
   // Create document metadata
+  const documentId = uuidv4();
   const document: UploadedDocument = {
-    id: uuidv4(),
+    id: documentId,
     title: file.name,
     created_at: new Date().toISOString(),
     content,
     user_id: userId,
+    status: 'pending',
+    progress: 0
   };
   
   // Store document in Supabase
@@ -63,23 +83,144 @@ export async function processDocument(file: File, userId?: string): Promise<Uplo
       user_id: userId,
       created_at: document.created_at,
       file_type: file.type,
-      status: 'complete',
-      vector_count: 0 // Initial count, update after processing if needed
+      status: 'pending',
+      progress: 0,
+      vector_count: 0
     }]);
   
-  // Process document for RAG
-  try {
-    console.log('Starting RAG processing');
-    await processDocumentForRAG(document);
-    console.log('Completed RAG processing');
-  } catch (error: unknown) {
-    console.error('Error in processDocumentForRAG:', error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to process document for RAG: ${errorMessage}`);
-  }
+  // Trigger async processing of the document
+  // Don't await this - we want to return quickly
+  Promise.resolve().then(() => {
+    processDocumentAsync(document)
+      .catch((error: Error | unknown) => {
+        console.error(`Async processing error for document ${documentId}:`, error);
+        // Update document status to error
+        supabaseAdmin
+          .from('documents')
+          .update({
+            status: 'error',
+            error_message: error instanceof Error ? error.message : String(error)
+          })
+          .eq('id', documentId)
+          .then(() => {
+            console.log(`Updated document ${documentId} status to error`);
+          })
+          .catch((updateError: Error | unknown) => {
+            console.error(`Failed to update document ${documentId} status:`, updateError);
+          });
+      });
+  });
   
   return document;
 }
+
+// Process a document asynchronously
+async function processDocumentAsync(document: UploadedDocument): Promise<void> {
+  const { id: documentId, user_id: userId } = document;
+  
+  // Skip if already being processed
+  if (processingQueue.get(documentId)) {
+    console.log(`Document ${documentId} is already being processed, skipping`);
+    return;
+  }
+  
+  // Mark as being processed
+  processingQueue.set(documentId, true);
+  
+  try {
+    // Update document status to processing
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'processing',
+        progress: 10
+      })
+      .eq('id', documentId);
+    
+    console.log(`Processing document ${documentId} for RAG`);
+    
+    // 1. Split document into chunks
+    await updateDocumentProgress(documentId, 20);
+    const chunks = splitIntoChunks(
+      document.content, 
+      document.id, 
+      document.title,
+      document.user_id
+    );
+    
+    // 2. Generate embeddings for each chunk
+    await updateDocumentProgress(documentId, 30);
+    const totalChunks = chunks.length;
+    const embeddedChunks = [];
+    
+    // Process chunks in batches to avoid rate limits
+    const batchSize = 5; // Smaller batch size for more frequent progress updates
+    
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const batchEmbeddings = await Promise.all(
+        batch.map(chunk => 
+          openai.embeddings.create({
+            model: 'text-embedding-ada-002',
+            input: chunk.text,
+          }).then(response => ({
+            ...chunk,
+            embedding: response.data[0].embedding,
+          }))
+        )
+      );
+      
+      embeddedChunks.push(...batchEmbeddings);
+      
+      // Update progress based on how many chunks we've processed
+      const progress = 30 + Math.floor((i + batch.length) / totalChunks * 60);
+      await updateDocumentProgress(documentId, progress);
+    }
+    
+    // 3. Store chunks in Pinecone
+    await updateDocumentProgress(documentId, 90);
+    await storeChunksInPinecone(embeddedChunks);
+    
+    // Update document status to complete
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'complete',
+        progress: 100,
+        vector_count: chunks.length,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+    
+    console.log(`Completed processing for document ${documentId}`);
+  } catch (error) {
+    console.error(`Error processing document ${documentId}:`, error);
+    
+    // Update document status to error
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'error',
+        error_message: error instanceof Error ? error.message : String(error),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+  } finally {
+    // Remove from processing queue
+    processingQueue.delete(documentId);
+  }
+}
+
+// Helper to update document progress
+async function updateDocumentProgress(documentId: string, progress: number): Promise<void> {
+  await supabaseAdmin
+    .from('documents')
+    .update({ progress })
+    .eq('id', documentId);
+}
+
+// Legacy function name for backward compatibility
+export const processDocument = uploadDocument;
 
 // Update the deleteDocument function to check user ownership
 export async function deleteDocument(id: string, userId: string, forceDelete = false): Promise<void> {
@@ -151,22 +292,6 @@ async function extractTextFromFile(file: File): Promise<string> {
   }
 }
 
-async function processDocumentForRAG(document: UploadedDocument): Promise<void> {
-  // 1. Split document into chunks
-  const chunks = splitIntoChunks(
-    document.content, 
-    document.id, 
-    document.title,
-    document.user_id // Pass user ID to chunks
-  );
-  
-  // 2. Generate embeddings for each chunk
-  const embeddedChunks = await generateEmbeddings(chunks);
-  
-  // 3. Store chunks in Pinecone
-  await storeChunksInPinecone(embeddedChunks);
-}
-
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
 export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 1000, overlap = 200): any[] {
   const chunks = [];
@@ -191,26 +316,6 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
   }
   
   return chunks;
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
-async function generateEmbeddings(chunks: any[]): Promise<any[]> {
-  const embeddedChunks = [];
-  
-  // Process chunks in batches to avoid rate limits
-  for (const chunk of chunks) {
-    const response = await openai.embeddings.create({
-      model: 'text-embedding-ada-002',
-      input: chunk.text,
-    });
-    
-    embeddedChunks.push({
-      ...chunk,
-      embedding: response.data[0].embedding,
-    });
-  }
-  
-  return embeddedChunks;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
@@ -285,4 +390,50 @@ export async function getRelatedDocuments(question: string, userId: string) {
   });
   
   return results.matches;
+}
+
+// Process a document by ID
+export async function processDocumentById(documentId: string): Promise<{success: boolean; message: string}> {
+  console.log(`Processing document by ID: ${documentId}`);
+  
+  try {
+    // Get document from database
+    const { data: document, error } = await supabaseAdmin
+      .from('documents')
+      .select('*')
+      .eq('id', documentId)
+      .single();
+    
+    if (error) {
+      console.error(`Error fetching document ${documentId}:`, error);
+      return { success: false, message: `Document not found: ${error.message}` };
+    }
+    
+    if (!document) {
+      return { success: false, message: 'Document not found' };
+    }
+    
+    // Skip if not in pending status
+    if (document.status !== 'pending') {
+      return { 
+        success: false, 
+        message: `Document is not pending (current status: ${document.status})` 
+      };
+    }
+    
+    // Process the document asynchronously
+    // Use void to indicate we're not waiting for the result
+    void processDocumentAsync(document);
+    
+    return { 
+      success: true, 
+      message: `Started processing document ${documentId}` 
+    };
+  } catch (error) {
+    console.error(`Error in processDocumentById for ${documentId}:`, error);
+    return { 
+      success: false, 
+      message: error instanceof Error ? error.message : 'Unknown error' 
+    };
+  }
 }
