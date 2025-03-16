@@ -95,7 +95,7 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
       .catch((error: Error | unknown) => {
         console.error(`Async processing error for document ${documentId}:`, error);
         // Update document status to error
-        supabaseAdmin
+        void supabaseAdmin
           .from('documents')
           .update({
             status: 'error',
@@ -104,9 +104,6 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
           .eq('id', documentId)
           .then(() => {
             console.log(`Updated document ${documentId} status to error`);
-          })
-          .catch((updateError: Error | unknown) => {
-            console.error(`Failed to update document ${documentId} status:`, updateError);
           });
       });
   });

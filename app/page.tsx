@@ -6,7 +6,7 @@ import ChatMessages from "@/components/chat/messages";
 import useApp from "@/hooks/use-app";
 import ChatHeader from "@/components/chat/header";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { DocumentPanel } from "@/components/chat/document-panel";
+import { DocumentsSection } from "@/components/DocumentsSection";
 import { useAuth } from "@/hooks/use-auth";
 import { LoginModal } from "@/components/auth/login-modal";
 import { Button } from "@/components/ui/button";
@@ -21,21 +21,9 @@ export default function Chat() {
     isLoading,
     indicatorState,
     clearMessages,
-    documents,
-    uploadDocument,
-    deleteDocument,
-  } = useApp(user || undefined); // Pass user to useApp
+  } = useApp(user || undefined); // We don't need documents, uploadDocument, deleteDocument anymore
 
   const [loginModalOpen, setLoginModalOpen] = useState(false);
-
-  const handleDeleteDocument = async (id: string, force = false) => {
-    try {
-      await deleteDocument(id, force);
-    } catch (error) {
-      console.error("Failed to delete document:", error);
-      throw error;
-    }
-  };
 
   // Add this console log
   console.log("Rendering Chat component, user state:", user);
@@ -64,11 +52,9 @@ export default function Chat() {
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize={25} minSize={20}>
               {user ? (
-                <DocumentPanel 
-                  documents={documents} 
-                  onUpload={uploadDocument} 
-                  onDelete={handleDeleteDocument}
-                />
+                <div className="h-full overflow-auto p-4">
+                  <DocumentsSection userId={user.id} />
+                </div>
               ) : (
                 <div className="h-full flex items-center justify-center">
                   <div className="text-center p-8">

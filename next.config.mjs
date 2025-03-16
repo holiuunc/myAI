@@ -1,10 +1,20 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-    api: {
-      bodyParser: {
-        sizeLimit: '50mb',
+  experimental: {
+    serverComponentsExternalPackages: ['pdf-parse', 'mammoth'],
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: '/api/:path*',
       },
-    },
-  };
+      {
+        source: '/documents/:path*',
+        destination: '/api/documents/:path*',
+      },
+    ];
+  },
+};
 
 export default nextConfig;

@@ -17,6 +17,7 @@ import type {
 
 import { streamedDoneSchema, streamedMessageSchema, streamedLoadingSchema, streamedErrorSchema } from "@/types/streaming";
 import { useAuth, type User } from "@/hooks/use-auth";
+import { getDocumentsClient, uploadDocumentClient, deleteDocumentClient } from "@/actions/client-actions";
 
 // In hooks/use-app.ts, modify the hook signature
 export default function useApp(externalUser?: User) {
@@ -38,6 +39,7 @@ export default function useApp(externalUser?: User) {
   const [indicatorState, setIndicatorState] = useState<LoadingIndicator[]>([]);
   const [input, setInput] = useState("");
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
 
   useEffect(() => {
     setWordCount(
@@ -48,51 +50,48 @@ export default function useApp(externalUser?: User) {
     );
   }, [messages]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  // Load documents when user changes
   useEffect(() => {
-    // Update document localStorage to be user-specific
-    if (!user) return;
-    
-    if (documents.length > 0) {
-      localStorage.setItem(`documents-${user.id}`, JSON.stringify(documents));
+    if (user) {
+      fetchDocuments();
     } else {
-      localStorage.removeItem(`documents-${user.id}`);
+      setDocuments([]);
     }
-  }, [documents, user?.id]);
+  }, [user?.id]);
 
   const fetchDocuments = async () => {
     if (!user) return;
     
     try {
-      // Fetch from API passing the user ID
-      const response = await fetch("/api/documents");
-      if (response.ok) {
-        const data = await response.json();
-        setDocuments(data.documents || []);
+      setIsLoadingDocuments(true);
+      // Use the client action to fetch documents
+      const result = await getDocumentsClient(user.id);
+      
+      if (result.success) {
+        setDocuments(result.documents || []);
+      } else {
+        console.error("Error fetching documents:", result.error);
       }
     } catch (error) {
       console.error("Error fetching documents:", error);
+    } finally {
+      setIsLoadingDocuments(false);
     }
   };
 
   const uploadDocument = async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
+    if (!user) throw new Error("User must be logged in to upload documents");
     
     try {
-      const response = await fetch("/api/documents/upload", {
-        method: "POST",
-        body: formData,
-      });
+      // Use the client action to upload document
+      const result = await uploadDocumentClient(file, user.id);
       
-      if (response.ok) {
-        const data = await response.json();
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-        setDocuments((prev: any) => [...prev, data.document]);
-        return data.document;
-      // biome-ignore lint/style/noUselessElse: <explanation>
+      if (result.success && result.document) {
+        // Add the new document to the list
+        setDocuments(prev => [result.document, ...prev]);
+        return result.document;
       } else {
-        throw new Error("Upload failed");
+        throw new Error(result.error || "Upload failed");
       }
     } catch (error) {
       console.error("Upload error:", error);
@@ -100,28 +99,21 @@ export default function useApp(externalUser?: User) {
     }
   };
 
-  // In your useApp hook
   const deleteDocument = async (id: string, force = false) => {
+    if (!user) return;
+    
     try {
-      const response = await fetch(`/api/documents/${id}${force ? '?force=true' : ''}`, {
-        method: 'DELETE',
-      });
+      // Use the client action to delete document
+      const result = await deleteDocumentClient(id, user.id);
       
-      if (response.status === 401) {
-        // User not authenticated, trigger login modal or redirect
-        return false;
+      if (result.success) {
+        // Remove the document from the list
+        setDocuments(prev => prev.filter(doc => doc.id !== id));
+      } else {
+        throw new Error(result.error || "Delete failed");
       }
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to delete document');
-      }
-      
-      // Refresh document list after successful deletion
-      await fetchDocuments();
-      return true;
     } catch (error) {
-      console.error("Failed to delete document:", error);
+      console.error("Delete error:", error);
       throw error;
     }
   };
