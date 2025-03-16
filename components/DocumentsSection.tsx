@@ -1,10 +1,10 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 import { useState, useEffect, useRef } from 'react';
-import { getDocumentsClient, deleteDocumentClient } from '@/actions/client-actions';
+import { getDocumentsClient, deleteDocumentClient } from '../actions/client-actions';
 import { DocumentUpload } from './DocumentUpload';
-import { Button } from '@/components/ui/button';
+import { Button } from '../components/ui/button';
 import { Trash2, FileText, RefreshCw, AlertCircle } from 'lucide-react';
-import { Progress } from '@/components/ui/progress';
+import { Progress } from '../components/ui/progress';
 
 interface DocumentsSectionProps {
   userId: string;
@@ -67,10 +67,19 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
   
   const handleUploadComplete = (document: any) => {
     // Add the new document to the list without reloading
-    if (document) {
-      setDocuments(prevDocs => [document, ...prevDocs]);
+    if (document && document.id) {
+      console.log("Adding new document to list:", document);
+      // Update with the newly uploaded document at the beginning of the list
+      setDocuments(prevDocs => {
+        // Check if document already exists to avoid duplicates
+        if (prevDocs.some(doc => doc.id === document.id)) {
+          return prevDocs;
+        }
+        return [document, ...prevDocs];
+      });
     } else {
-      // If no document is received, fall back to loading all documents
+      console.warn("Received invalid document data:", document);
+      // Fall back to loading all documents
       loadDocuments();
     }
   };

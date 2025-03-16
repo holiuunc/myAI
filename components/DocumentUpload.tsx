@@ -55,9 +55,13 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
       
       if (result.success && result.document) {
         setProgress(100);
-        if (onUploadComplete) {
-          onUploadComplete(result.document);
-        }
+        setTimeout(() => {
+          // Add a small delay before calling onUploadComplete to ensure state updates
+          if (onUploadComplete) {
+            console.log("Upload complete, document data:", result.document);
+            onUploadComplete(result.document);
+          }
+        }, 300);
       } else {
         throw new Error(result.error || 'Upload failed');
       }
@@ -71,6 +75,11 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+      
+      // Reset progress after a delay
+      setTimeout(() => {
+        setProgress(0);
+      }, 2000);
     }
   };
   

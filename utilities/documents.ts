@@ -352,14 +352,36 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
 async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
   console.log(`Deleting chunks for document ${documentId} from Pinecone namespace: ${userId}`);
   
-  // Get namespace-specific index (consistent with other functions)
-  const namespaceIndex = pineconeIndex.namespace(userId);
-  
-  // Delete by query, using the namespace-specific index
-  await namespaceIndex.deleteMany({
-    filter: { source_url: documentId }
-    // No namespace parameter needed here
-  });
+  try {
+    // Get namespace-specific index
+    const namespaceIndex = pineconeIndex.namespace(userId);
+    
+    // First, query to get all vector IDs for this document
+    const queryResponse = await namespaceIndex.query({
+      vector: Array(1536).fill(0), // Dummy vector for query
+      topK: 1000, // Get up to 1000 vectors
+      filter: { source_url: documentId },
+      includeMetadata: false
+    });
+    
+    // Extract the vector IDs
+    const vectorIds = queryResponse.matches.map(match => match.id);
+    
+    if (vectorIds.length === 0) {
+      console.log(`No vectors found for document ${documentId}`);
+      return;
+    }
+    
+    console.log(`Found ${vectorIds.length} vectors to delete for document ${documentId}`);
+    
+    // Delete by IDs (supported in all plans)
+    await namespaceIndex.deleteMany(vectorIds);
+    
+    console.log(`Successfully deleted ${vectorIds.length} vectors for document ${documentId}`);
+  } catch (error) {
+    console.error(`Error deleting vectors for document ${documentId}:`, error);
+    throw error;
+  }
 }
 
 // Add this function for single embeddings

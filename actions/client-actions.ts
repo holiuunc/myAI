@@ -94,17 +94,27 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
     formData.append('userId', userId);
     
     // Upload to API
+    console.log(`Uploading document ${file.name} for user ${userId}...`);
     const response = await fetch('/api/documents/upload', {
       method: 'POST',
       body: formData
     });
     
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorData = await response.json().catch(() => null);
+      const errorText = errorData?.error || await response.text();
       throw new Error(errorText || `Failed to upload document (${response.status})`);
     }
     
     const data = await response.json();
+    
+    // Ensure we have a valid document object
+    if (!data.document || !data.document.id) {
+      console.warn('Upload response is missing document data:', data);
+      throw new Error('Invalid response from server: missing document data');
+    }
+    
+    console.log(`Document uploaded successfully, id: ${data.document.id}`);
     return {
       success: true,
       document: data.document
