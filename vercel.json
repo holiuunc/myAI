@@ -1,14 +1,21 @@
 {
   "functions": {
-    "workers/*.ts": {
-      "includeFiles": "node_modules/**"
-    },
-    "workers/*.mjs": {
-      "includeFiles": "node_modules/**"
-    },
     "api/**/*.ts": {
-      "includeFiles": "node_modules/**"
+      "memory": 1024,
+      "maxDuration": 60
     }
   },
-  "installCommand": "npm install"
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next",
+      "config": {
+        "includeFiles": ["workers/**"]
+      }
+    }
+  ],
+  "version": 2,
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "outputDirectory": ".next"
 } 
