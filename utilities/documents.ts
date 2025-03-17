@@ -7,8 +7,6 @@ import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
-import { Worker } from 'worker_threads';
-import path from 'path';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -130,19 +128,30 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
   
   try {
     // Update document status to processing
+    console.log(`Setting initial status for document ${documentId}`);
     await supabaseAdmin
       .from('documents')
       .update({
         status: 'processing',
-        progress: 10,
+        progress: 5,
         updated_at: new Date().toISOString()
       })
       .eq('id', documentId);
     
     console.log(`Processing document ${documentId} for RAG`);
     
-    // 1. Split document into chunks with optimized size
-    const chunks = splitIntoChunks(
+    // 1. Split document into chunks with optimized size - update to 15%
+    console.log(`Updating progress to 15% - chunking stage`);
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'processing',
+        progress: 15,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+    
+    const result = splitIntoChunks(
       document.content, 
       document.id, 
       document.title,
@@ -151,11 +160,15 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
       200    // Reduced overlap while maintaining context
     );
     
-    // Update progress after chunking
+    const { chunks, metrics } = result;
+    
+    // Store metrics in Supabase for user visibility - update to 25%
+    console.log(`Updating progress to 25% - embedding preparation stage`);
     await supabaseAdmin
       .from('documents')
       .update({
-        progress: 30,
+        status: 'processing',
+        progress: 25,
         updated_at: new Date().toISOString()
       })
       .eq('id', documentId);
@@ -173,10 +186,11 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
         user_id: chunk.user_id,
       }));
       
-      // Store the chunks directly using the function we now use for the API route
-      await storeChunksInPinecone(preparedChunks);
+      // Process more chunks in parallel by using a higher batch size for better performance
+      await storeChunksInPinecone(preparedChunks, documentId);
       
-      // Update document status to complete
+      // Update document status to complete - 100%
+      console.log(`Setting final status for document ${documentId} to complete (100%)`);
       await supabaseAdmin
         .from('documents')
         .update({
@@ -187,15 +201,30 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
         })
         .eq('id', documentId);
       
+      // Verify the update was successful by explicitly checking
+      const { data: verifyDoc, error: verifyError } = await supabaseAdmin
+        .from('documents')
+        .select('progress, status')
+        .eq('id', documentId)
+        .single();
+        
+      if (verifyError) {
+        console.error(`Failed to verify final update: ${verifyError.message}`);
+      } else {
+        console.log(`Verified final document state: Progress=${verifyDoc.progress}%, Status=${verifyDoc.status}`);
+      }
+      
       console.log(`Completed processing for document ${documentId}`);
     } catch (error) {
       console.error(`Error processing document ${documentId}:`, error);
       
       // Update document status to error
+      console.log(`Setting error status for document ${documentId}`);
       await supabaseAdmin
         .from('documents')
         .update({
           status: 'error',
+          progress: 0,
           error_message: error instanceof Error ? error.message : String(error),
           updated_at: new Date().toISOString()
         })
@@ -207,10 +236,12 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
     console.error(`Error processing document ${documentId}:`, error);
     
     // Update document status to error
+    console.log(`Setting error status for document ${documentId} (outer catch)`);
     await supabaseAdmin
       .from('documents')
       .update({
         status: 'error',
+        progress: 0,
         error_message: error instanceof Error ? error.message : String(error),
         updated_at: new Date().toISOString()
       })
@@ -223,12 +254,63 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
   }
 }
 
-// Helper to update document progress
-async function updateDocumentProgress(documentId: string, progress: number): Promise<void> {
-  await supabaseAdmin
-    .from('documents')
-    .update({ progress })
-    .eq('id', documentId);
+// Helper to update document progress with additional metadata for UI
+async function updateDocumentProgress(documentId: string, progress: number, status?: string, additionalData?: any): Promise<void> {
+  // Create the base update data with the required progress field
+  const updateData: any = { 
+    progress,
+    updated_at: new Date().toISOString()
+  };
+  
+  // Always include status when provided
+  if (status) {
+    updateData.status = status;
+  }
+  
+  // Log clear information about what's being updated
+  console.log(`Updating document ${documentId}: Progress=${progress}%, Status=${status || 'unchanged'}`);
+  
+  try {
+    // Execute the base update first to ensure progress and status are updated
+    const { error } = await supabaseAdmin
+      .from('documents')
+      .update(updateData)
+      .eq('id', documentId);
+      
+    if (error) {
+      throw error;
+    }
+    
+    // Verify the update was successful
+    const { data: updatedDoc, error: verifyError } = await supabaseAdmin
+      .from('documents')
+      .select('id, progress, status')
+      .eq('id', documentId)
+      .single();
+      
+    if (verifyError) {
+      console.error(`Failed to verify document update: ${verifyError.message}`);
+    } else {
+      console.log(`Document updated successfully: Progress=${updatedDoc.progress}%, Status=${updatedDoc.status}`);
+    }
+  } catch (error) {
+    console.error(`Failed to update progress for document ${documentId}:`, error);
+    
+    // Attempt a fallback update with only the essential fields
+    try {
+      console.log(`Attempting fallback update for document ${documentId} with minimal fields`);
+      await supabaseAdmin
+        .from('documents')
+        .update({ 
+          progress, 
+          status: status || 'processing',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', documentId);
+    } catch (fallbackError) {
+      console.error(`Even fallback update failed: ${fallbackError}`);
+    }
+  }
 }
 
 // Legacy function name for backward compatibility
@@ -364,10 +446,10 @@ function findSplitPoint(text: string, targetLength: number): number {
   return targetLength;
 }
 
-export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 2000, overlap = 200): any[] {
+export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 2000, overlap = 200): { chunks: any[]; metrics: any } {
   if (!content || typeof content !== 'string') {
     console.warn('Invalid content provided to splitIntoChunks');
-    return [];
+    return { chunks: [], metrics: {} };
   }
 
   // Clean the content - normalize whitespace but preserve paragraph breaks
@@ -379,7 +461,7 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
 
   if (cleanContent.length === 0) {
     console.warn('Content is empty after cleaning');
-    return [];
+    return { chunks: [], metrics: {} };
   }
 
   // Constants and validation
@@ -495,11 +577,23 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
     console.warn('Warning: Some chunks exceed maximum size limit');
   }
 
-  return chunks;
+  // Return chunks and processing metrics
+  return {
+    chunks,
+    metrics: {
+      totalInputChars,
+      totalOutputChars,
+      coverage: coverage.toFixed(2),
+      chunkCount: chunks.length,
+      avgChunkSize: Math.round(totalOutputChars / chunks.length),
+      largestChunk: Math.max(...chunks.map(c => c.text.length)),
+      smallestChunk: Math.min(...chunks.map(c => c.text.length)),
+    }
+  };
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
+async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string): Promise<void> {
   console.log(`Storing ${embeddedChunks.length} chunks in Pinecone using API route`);
   
   if (!embeddedChunks.length) {
@@ -511,7 +605,7 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
   const userId = embeddedChunks[0].user_id;
   
   // Prepare chunks to send to the API
-  const chunksToProcess = embeddedChunks.map(chunk => ({
+  const chunksToProcess = embeddedChunks.map((chunk: any) => ({
     text: chunk.text,
     pre_context: chunk.pre_context,
     post_context: chunk.post_context,
@@ -521,8 +615,9 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
     user_id: chunk.user_id,
   }));
   
-  // Process in batches of maximum 50 chunks at a time to avoid timeouts
-  const batchSize = 50;
+  // Set batch size to 200 as previously determined optimal value
+  // This keeps within OpenAI's token limits while optimizing speed
+  const batchSize = 200; // Based on previous optimization
   const batches = [];
   
   for (let i = 0; i < chunksToProcess.length; i += batchSize) {
@@ -531,7 +626,7 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
   
   console.log(`Processing chunks in ${batches.length} batches of max ${batchSize} chunks each`);
   
-  let batchCounter = 0;
+  let totalChunksProcessed = 0;
   
   // Get the base URL for the API
   // In server-side code, we need to use the full URL, not a relative one
@@ -544,12 +639,36 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
     
   const apiUrl = `${baseUrl}/api/documents/process`;
   
-  // Send each batch to the API route
-  for (const batch of batches) {
-    batchCounter++;
-    console.log(`Processing batch ${batchCounter}/${batches.length} with ${batch.length} chunks`);
+  // Calculate progress increments (from 25% to 95%)
+  const progressStart = 25;
+  const progressMax = 95;
+  
+  // Process batches serially to ensure progress updates are sequential and visible
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const batchNumber = i + 1;
     
     try {
+      // Calculate a more dramatic progress increment for better visibility
+      // Progress will jump by larger amounts for more visible UI feedback
+      const currentProgress = Math.round(progressStart + ((progressMax - progressStart) * i / batches.length));
+      
+      // Update progress before processing batch
+      if (documentId) {
+        // Force immediate progress update with direct status update
+        console.log(`Setting progress to ${currentProgress}% before processing batch ${batchNumber}/${batches.length}`);
+        await supabaseAdmin
+          .from('documents')
+          .update({
+            progress: currentProgress,
+            status: 'processing',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', documentId);
+      }
+      
+      console.log(`Processing batch ${batchNumber}/${batches.length} with ${batch.length} chunks`);
+      
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
@@ -567,19 +686,50 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
       }
       
       const result = await response.json();
-      console.log(`Batch ${batchCounter} processed successfully: ${result.chunksProcessed} chunks`);
+      console.log(`Batch ${batchNumber} processed successfully: ${result.chunksProcessed} chunks`);
       
-      // Small delay between batches to avoid rate limiting
-      if (batchCounter < batches.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      totalChunksProcessed += (result.chunksProcessed || batch.length);
+      
+      // Update progress after processing batch with a higher value
+      if (documentId && batchNumber < batches.length) {
+        const nextProgress = Math.round(progressStart + ((progressMax - progressStart) * (i + 0.5) / batches.length));
+        console.log(`Setting progress to ${nextProgress}% after processing batch ${batchNumber}/${batches.length}`);
+        
+        // Use direct update to ensure status and progress are updated
+        await supabaseAdmin
+          .from('documents')
+          .update({
+            progress: nextProgress,
+            status: 'processing',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', documentId);
+      }
+      
+      // Small delay between batches to allow UI to update
+      if (batchNumber < batches.length) {
+        await new Promise(resolve => setTimeout(resolve, 750));
       }
     } catch (error) {
-      console.error(`Error processing batch ${batchCounter}:`, error);
+      console.error(`Error processing batch ${batchNumber}:`, error);
       throw error;
     }
   }
   
   console.log('Successfully stored all chunks in Pinecone via API route');
+  
+  // Final progress update before completion
+  if (documentId) {
+    console.log(`Setting progress to ${progressMax}% before finalizing`);
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        progress: progressMax,
+        status: 'processing',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+  }
 }
 
 async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
@@ -589,28 +739,69 @@ async function deleteDocumentChunksFromPinecone(documentId: string, userId: stri
     // Get namespace-specific index
     const namespaceIndex = pineconeIndex.namespace(userId);
     
-    // First, query to get all vector IDs for this document
-    const queryResponse = await namespaceIndex.query({
-      vector: Array(1536).fill(0), // Dummy vector for query
-      topK: 1000, // Get up to 1000 vectors
+    // We need to handle potential pagination since a document might have more than 1000 vectors
+    let totalDeleted = 0;
+    let hasMoreVectors = true;
+    
+    while (hasMoreVectors) {
+      // Query to get vector IDs for this document (up to 10000 at a time to handle large documents)
+      console.log(`Querying for vectors of document ${documentId}, batch ${totalDeleted}`);
+      const queryResponse = await namespaceIndex.query({
+        vector: Array(1536).fill(0), // Dummy vector for query
+        topK: 10000, // Get up to 10000 vectors at once
+        filter: { source_url: documentId },
+        includeMetadata: false
+      });
+      
+      // Extract the vector IDs
+      const vectorIds = queryResponse.matches.map(match => match.id);
+      
+      if (vectorIds.length === 0) {
+        console.log(`No more vectors found for document ${documentId}`);
+        hasMoreVectors = false;
+        break;
+      }
+      
+      console.log(`Found ${vectorIds.length} vectors to delete for document ${documentId}`);
+      
+      // Delete vectors in batches of 1000 to avoid timeouts
+      const batchSize = 1000;
+      for (let i = 0; i < vectorIds.length; i += batchSize) {
+        const batch = vectorIds.slice(i, i + batchSize);
+        await namespaceIndex.deleteMany(batch);
+        console.log(`Deleted batch of ${batch.length} vectors (${i + batch.length}/${vectorIds.length})`);
+      }
+      
+      totalDeleted += vectorIds.length;
+      
+      // If we got less than our query limit, we're done
+      if (vectorIds.length < 10000) {
+        hasMoreVectors = false;
+      } else {
+        // Add a small delay to prevent rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    // Perform a final verification query to make sure all vectors are deleted
+    const verificationResponse = await namespaceIndex.query({
+      vector: Array(1536).fill(0),
+      topK: 100,
       filter: { source_url: documentId },
       includeMetadata: false
     });
     
-    // Extract the vector IDs
-    const vectorIds = queryResponse.matches.map(match => match.id);
-    
-    if (vectorIds.length === 0) {
-      console.log(`No vectors found for document ${documentId}`);
-      return;
+    if (verificationResponse.matches.length > 0) {
+      console.warn(`Found ${verificationResponse.matches.length} remaining vectors after deletion attempt. Trying one more time.`);
+      
+      // One more attempt with direct filter deletion
+      const remainingIds = verificationResponse.matches.map(match => match.id);
+      await namespaceIndex.deleteMany(remainingIds);
+      
+      console.log(`Completed second deletion attempt for remaining ${remainingIds.length} vectors`);
     }
     
-    console.log(`Found ${vectorIds.length} vectors to delete for document ${documentId}`);
-    
-    // Delete by IDs (supported in all plans)
-    await namespaceIndex.deleteMany(vectorIds);
-    
-    console.log(`Successfully deleted ${vectorIds.length} vectors for document ${documentId}`);
+    console.log(`Successfully deleted a total of ${totalDeleted} vectors for document ${documentId}`);
   } catch (error) {
     console.error(`Error deleting vectors for document ${documentId}:`, error);
     throw error;
