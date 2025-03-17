@@ -5,6 +5,8 @@ import { OpenAI } from 'openai';
 import { chunkSchema, type Chunk, type UploadedDocument } from '@/types';
 import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
+import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -130,52 +132,78 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
       .from('documents')
       .update({
         status: 'processing',
-        progress: 10
+        progress: 10,
+        updated_at: new Date().toISOString()
       })
       .eq('id', documentId);
     
     console.log(`Processing document ${documentId} for RAG`);
     
-    // 1. Split document into chunks
-    await updateDocumentProgress(documentId, 20);
+    // 1. Split document into chunks with optimized size
     const chunks = splitIntoChunks(
       document.content, 
       document.id, 
       document.title,
-      document.user_id
+      document.user_id,
+      1500,  // Increased chunk size for fewer API calls
+      150    // Reduced overlap while maintaining context
     );
     
-    // 2. Generate embeddings for each chunk
-    await updateDocumentProgress(documentId, 30);
+    // Update progress after chunking
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        progress: 30,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+    
+    // 2. Process chunks in parallel with optimal batch sizes
     const totalChunks = chunks.length;
     const embeddedChunks = [];
     
-    // Process chunks in batches to avoid rate limits
-    const batchSize = 5; // Smaller batch size for more frequent progress updates
+    // Process in larger batches (20 chunks per batch)
+    const batchSize = 20;
+    const batches = [];
     
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
-      const batchEmbeddings = await Promise.all(
-        batch.map(chunk => 
-          openai.embeddings.create({
-            model: 'text-embedding-ada-002',
-            input: chunk.text,
-          }).then(response => ({
-            ...chunk,
-            embedding: response.data[0].embedding,
-          }))
-        )
-      );
-      
-      embeddedChunks.push(...batchEmbeddings);
-      
-      // Update progress based on how many chunks we've processed
-      const progress = 30 + Math.floor((i + batch.length) / totalChunks * 60);
-      await updateDocumentProgress(documentId, progress);
+      batches.push(batch);
     }
     
-    // 3. Store chunks in Pinecone
-    await updateDocumentProgress(documentId, 90);
+    // Process batches in parallel with rate limiting
+    const processedBatches = await Promise.all(
+      batches.map(async (batch, batchIndex) => {
+        // Add a small delay between batches to prevent rate limiting
+        if (batchIndex > 0) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        
+        const batchEmbeddings = await openai.embeddings.create({
+          model: 'text-embedding-ada-002',
+          input: batch.map(chunk => chunk.text),
+        });
+        
+        return batch.map((chunk, index) => ({
+          ...chunk,
+          embedding: batchEmbeddings.data[index].embedding,
+        }));
+      })
+    );
+    
+    // Flatten the results
+    embeddedChunks.push(...processedBatches.flat());
+    
+    // Update progress to 70%
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        progress: 70,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+    
+    // 3. Store chunks in Pinecone with optimized batching
     await storeChunksInPinecone(embeddedChunks);
     
     // Update document status to complete
@@ -202,8 +230,10 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
         updated_at: new Date().toISOString()
       })
       .eq('id', documentId);
+    
+    throw error;
   } finally {
-    // Remove from processing queue
+    // Always remove from processing queue
     processingQueue.delete(documentId);
   }
 }
@@ -264,40 +294,61 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
   }
 }
 
+function sanitizeText(text: string): string {
+  return text
+    // Replace invalid UTF-16 surrogate pairs
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/g, '')
+    // Replace other problematic characters
+    .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\uFFFD\uFFFE\uFFFF]/g, '')
+    // Normalize Unicode characters
+    .normalize('NFKC');
+}
+
 async function extractTextFromFile(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
   
-  if (file.type === 'application/pdf') {
-    // For a proper implementation, you'd use pdf-parse library
-    // Since you may not have it installed yet, let's handle text files first
-    console.log('PDF detected - using plain text extraction for now');
-    return new TextDecoder().decode(buffer);
-  // biome-ignore lint/style/noUselessElse: <explanation>
-  } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    // For a proper implementation, you'd use mammoth library
-    console.log('DOCX detected - using plain text extraction for now');
-    return new TextDecoder().decode(buffer);
-  // biome-ignore lint/style/noUselessElse: <explanation>
-  } else if (file.type === 'text/plain') {
-    // Simple text file
-    return new TextDecoder().decode(buffer);
-  // biome-ignore lint/style/noUselessElse: <explanation>
-  } else {
-    console.warn(`Unsupported file type: ${file.type}, treating as plain text`);
-    return new TextDecoder().decode(buffer);
+  let text: string;
+  
+  try {
+    if (file.type === 'application/pdf') {
+      const pdfData = await pdfParse(buffer);
+      text = pdfData.text;
+    } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+      text = result.value;
+    } else if (file.type === 'text/plain') {
+      text = new TextDecoder().decode(buffer);
+    } else {
+      console.warn(`Unsupported file type: ${file.type}, treating as plain text`);
+      text = new TextDecoder().decode(buffer);
+    }
+    
+    // Clean up common issues in extracted text
+    text = text
+      // Remove excessive whitespace
+      .replace(/\s+/g, ' ')
+      // Remove excessive newlines
+      .replace(/\n\s*\n/g, '\n')
+      // Trim whitespace
+      .trim();
+    
+    // Sanitize the extracted text
+    return sanitizeText(text);
+  } catch (error) {
+    console.error(`Error extracting text from ${file.type} file:`, error);
+    throw new Error(`Failed to extract text from ${file.type} file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
 export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 1000, overlap = 200): any[] {
   const chunks = [];
   let i = 0;
   
   while (i < content.length) {
-    const chunkText = content.slice(i, i + chunkSize);
-    const preContext = i > 0 ? content.slice(Math.max(0, i - overlap), i) : '';
-    const postContext = content.slice(i + chunkSize, Math.min(content.length, i + chunkSize + overlap));
+    const chunkText = sanitizeText(content.slice(i, i + chunkSize));
+    const preContext = i > 0 ? sanitizeText(content.slice(Math.max(0, i - overlap), i)) : '';
+    const postContext = sanitizeText(content.slice(i + chunkSize, Math.min(content.length, i + chunkSize + overlap)));
     
     chunks.push({
       text: chunkText,
@@ -306,7 +357,7 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
       source_url: documentId,
       source_description: documentTitle,
       order: Math.floor(i / chunkSize),
-      user_id: userId, // Store userId with each chunk
+      user_id: userId,
     });
     
     i += chunkSize - overlap;
@@ -328,25 +379,34 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
       source_url: chunk.source_url,
       source_description: chunk.source_description,
       order: chunk.order,
-      user_id: chunk.user_id, // Ensure user_id is in metadata for filtering
+      user_id: chunk.user_id,
     },
   }));
   
-  // Extract userId from the first chunk (they all have same user)
   const userId = embeddedChunks[0].user_id;
-  
-  // Get namespace-specific index (like in getRelatedDocuments function)
   const namespaceIndex = pineconeIndex.namespace(userId);
   
-  // Upsert in batches of 100, using user's ID as namespace
-  const batchSize = 100;
+  // Optimize batch size for Pinecone (increased to 250)
+  const batchSize = 250;
+  const batches = [];
+  
   for (let i = 0; i < vectors.length; i += batchSize) {
-    const batch = vectors.slice(i, i + batchSize);
-    console.log(`Upserting batch ${i/batchSize + 1} to Pinecone in namespace: ${userId}`);
-    await namespaceIndex.upsert(batch);
+    batches.push(vectors.slice(i, i + batchSize));
   }
   
-  console.log('Successfully stored chunks in Pinecone');
+  // Process Pinecone batches in parallel with rate limiting
+  await Promise.all(
+    batches.map(async (batch, index) => {
+      // Add a small delay between batches
+      if (index > 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      console.log(`Upserting batch ${index + 1}/${batches.length} to Pinecone`);
+      return namespaceIndex.upsert(batch);
+    })
+  );
+  
+  console.log('Successfully stored all chunks in Pinecone');
 }
 
 async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
