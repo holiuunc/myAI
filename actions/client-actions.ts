@@ -94,7 +94,7 @@ export async function deleteDocumentClient(documentId: string, userId: string): 
 }
 
 /**
- * Client-side function to upload a document
+ * Client-side function to upload a document using direct-to-storage upload
  */
 export async function uploadDocumentClient(file: File, userId: string): Promise<{
   success: boolean;
@@ -109,14 +109,9 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
   }
   
   try {
-    // Create form data
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('userId', userId);
-    
-    // Upload to API
-    console.log(`Uploading document ${file.name} for user ${userId}...`);
-    const response = await fetch('/api/documents/upload', {
+    // Step 1: Get a signed URL from the server
+    console.log(`Getting signed URL for ${file.name}...`);
+    const signedUrlResponse = await fetch('/api/documents/signed-url', {
       method: 'POST',
       body: formData,
       // Don't set Content-Type for FormData
@@ -140,20 +135,40 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
       }
     }
     
-    const data = await response.json();
+    const { signedUrl, filePath } = await signedUrlResponse.json();
     
-    // Ensure we have a valid document object
-    if (!data.document || !data.document.id) {
-      console.warn('Upload response is missing document data:', data);
-      throw new Error('Invalid response from server: missing document data');
+    // Step 2: Upload directly to Supabase Storage
+    console.log(`Uploading file directly to storage: ${filePath}`);
+    const uploadResponse = await fetch(signedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type },
+      body: file
+    });
+    
+    if (!uploadResponse.ok) {
+      throw new Error(`Storage upload failed: ${uploadResponse.status}`);
     }
     
-    console.log(`Document uploaded successfully, id: ${data.document.id}`);
+    // Step 3: Trigger server-side processing of the uploaded file
+    console.log(`Triggering processing for ${filePath}`);
+    const processResponse = await fetch('/api/documents/process-uploaded', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath })
+    });
+    
+    if (!processResponse.ok) {
+      const errorText = await processResponse.text();
+      throw new Error(`Processing failed: ${errorText}`);
+    }
+    
+    const result = await processResponse.json();
+    console.log(`Document processed successfully, id: ${result.document?.id}`);
+    
     return {
       success: true,
-      document: data.document
+      document: result.document
     };
-    
   } catch (error) {
     console.error('Error uploading document:', error);
     return {
@@ -201,4 +216,4 @@ export async function checkDocumentStatusClient(documentId: string): Promise<{
       error: error instanceof Error ? error.message : 'Failed to check document status'
     };
   }
-} 
+}

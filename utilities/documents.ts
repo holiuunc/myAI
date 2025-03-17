@@ -352,7 +352,7 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
     // Check if document exists and belongs to user
     const { data: doc } = await supabaseAdmin
       .from('documents')
-      .select('id')
+      .select('id, title')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -362,7 +362,24 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
       throw new Error(`Document with ID ${id} not found or doesn't belong to you`);
     }
     
-    // Delete from Supabase
+    // 1. Delete the file from storage first
+    try {
+      const { error: storageError } = await supabaseAdmin.storage
+        .from('documents')
+        .remove([`${userId}/${doc.title}`]);
+        
+      if (storageError) {
+        console.warn(`Failed to delete storage file for document ${id}: ${storageError.message}`);
+        // Continue with deletion even if storage file deletion fails
+      } else {
+        console.log(`Deleted storage file for document ${id}`);
+      }
+    } catch (storageError) {
+      console.warn(`Error deleting storage file: ${storageError}`);
+      // Continue with deletion even if storage file deletion fails
+    }
+    
+    // 2. Delete from Supabase database
     await supabaseAdmin
       .from('documents')
       .delete()
@@ -371,20 +388,17 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
       
     console.log(`Removed document metadata for ID ${id}`);
     
-    // Only attempt to remove from Pinecone if not force deleting
+    // 3. Only attempt to remove from Pinecone if not force deleting
     if (!forceDelete) {
       try {
-        // Pass the userId here!
         await deleteDocumentChunksFromPinecone(id, userId);
       } catch (pineconeError) {
         console.error(`Error deleting from Pinecone: ${pineconeError}`);
-        // Only throw if not force deleting
         if (!forceDelete) throw pineconeError;
       }
     }
   } catch (error) {
     console.error(`Error in deleteDocument: ${error}`);
-    // If force delete, don't throw the error
     if (!forceDelete) throw error;
   }
 }
@@ -411,7 +425,7 @@ async function extractTextFromFile(file: File): Promise<string> {
       try {
         // Capture console warnings temporarily
         const originalWarn = console.warn;
-        console.warn = function(message: string, ...args: any[]) {
+        console.warn = (message: string, ...args: any[]) => {
           // Filter out known noise warnings
           if (message && typeof message === 'string' &&
               !(message.includes('Unsupported color mode') || 
@@ -435,7 +449,7 @@ async function extractTextFromFile(file: File): Promise<string> {
               .filter((item: any) => 'str' in item) // Filter for text items that have 'str' property
               .map((item: any) => item.str)
               .join(' ');
-            fullText += pageText + ' ';
+            fullText += `${pageText} `;
           }
           text = fullText;
         } finally {
@@ -448,7 +462,7 @@ async function extractTextFromFile(file: File): Promise<string> {
         
         // Capture console warnings temporarily
         const originalWarn = console.warn;
-        console.warn = function(message: string, ...args: any[]) {
+        console.warn = (message: string, ...args: any[]) => {
           // Filter out known noise warnings
           if (message && typeof message === 'string' &&
               !(message.includes('Unsupported color mode') || 
@@ -510,6 +524,165 @@ async function extractTextFromFile(file: File): Promise<string> {
   } catch (error) {
     console.error(`Error extracting text from ${file.type} file:`, error);
     throw new Error(`Failed to extract text from ${file.type} file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Add this function to your documents.ts file
+export async function processUploadedDocument(
+  fileData: Blob, 
+  filePath: string,
+  userId: string
+): Promise<UploadedDocument> {
+  console.log(`Processing uploaded file from storage: ${filePath}`);
+  
+  if (!userId) {
+    throw new Error("User must be logged in to process documents");
+  }
+  
+  // Extract filename from the path
+  const fileName = filePath.split('/').pop() || 'unknown-file';
+  
+  // Determine file type based on name or blob type
+  const fileType = fileData.type || 
+    (fileName.endsWith('.pdf') ? 'application/pdf' : 
+     fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+     'text/plain');
+  
+  // Validate file type
+  if (!ALLOWED_FILE_TYPES.includes(fileType)) {
+    throw new Error(`File type '${fileType}' not supported. Please upload PDF, DOCX, or text files.`);
+  }
+  
+  // Extract content from the blob
+  const text = await extractTextFromBlob(fileData);
+  console.log(`Extracted ${text.length} characters from file`);
+
+  // Check for empty content
+  if (!text || text.trim().length === 0) {
+    throw new Error("The document appears to be empty or could not be processed");
+  }
+  
+  // Create document metadata
+  const documentId = uuidv4();
+  const document: UploadedDocument = {
+    id: documentId,
+    title: fileName,
+    created_at: new Date().toISOString(),
+    content: text,
+    user_id: userId,
+    status: 'pending',
+    progress: 0
+  };
+  
+  // Store document in Supabase
+  await supabaseAdmin
+    .from('documents')
+    .insert([{
+      id: document.id,
+      title: document.title,
+      user_id: userId,
+      created_at: document.created_at,
+      file_type: fileType,
+      status: 'pending',
+      progress: 0,
+      vector_count: 0
+    }]);
+  
+  // Start async processing of the document
+  Promise.resolve().then(() => {
+    processDocumentAsync(document)
+      .catch((error: Error | unknown) => {
+        console.error(`Async processing error for document ${documentId}:`, error);
+        void supabaseAdmin
+          .from('documents')
+          .update({
+            status: 'error',
+            error_message: error instanceof Error ? error.message : String(error)
+          })
+          .eq('id', documentId);
+      });
+  });
+
+  // After successful processing, delete the original file
+  try {
+    const { error: storageError } = await supabaseAdmin.storage
+      .from('documents')
+      .remove([filePath]);
+      
+    if (storageError) {
+      console.warn(`Failed to delete processed file ${filePath}: ${storageError.message}`);
+    } else {
+      console.log(`Deleted processed file ${filePath} to save storage space`);
+    }
+  } catch (storageError) {
+    console.warn(`Error during cleanup of processed file: ${storageError}`);
+    // Non-critical error, don't throw
+  }
+  
+  return document;
+}
+
+// Helper function to extract text from a Blob
+async function extractTextFromBlob(blob: Blob): Promise<string> {
+  // Convert Blob to ArrayBuffer
+  const arrayBuffer = await blob.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  
+  let text: string;
+  
+  try {
+    // Use existing logic but with buffer instead of file
+    if (blob.type === 'application/pdf') {
+      // First try pdfjs-serverless as it's more reliable
+      try {
+        const { getDocument } = await resolvePDFJS();
+        const uint8Array = new Uint8Array(buffer);
+        const pdf = await getDocument({ data: uint8Array, useSystemFonts: true }).promise;
+        
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items
+            .filter((item: any) => 'str' in item)
+            .map((item: any) => item.str)
+            .join(' ');
+          fullText += `${pageText} `;
+        }
+        text = fullText;
+      } catch (pdfJsError) {
+        console.warn('pdfjs-serverless failed, falling back to pdf2json:', pdfJsError);
+        
+        const pdfParser = new PDFParser(null);
+        text = await new Promise<string>((resolve, reject) => {
+          pdfParser.on('pdfParser_dataError', (errData: any) => reject(errData.parserError));
+          pdfParser.on('pdfParser_dataReady', () => {
+            resolve(pdfParser.getRawTextContent());
+          });
+          
+          pdfParser.parseBuffer(buffer);
+        });
+      }
+    } else if (blob.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      // Simplified DOCX extraction using same approach as in extractTextFromFile
+      text = new TextDecoder().decode(buffer)
+        .replace(/\uFFFD/g, ' ')
+        .replace(/[^\x20-\x7E\n\r\t]/g, ' ');
+    } else {
+      // Plain text
+      text = new TextDecoder().decode(buffer);
+    }
+    
+    // Clean up as in extractTextFromFile
+    text = text
+      .replace(/\s+/g, ' ')
+      .replace(/\n\s*\n/g, '\n')
+      .trim();
+    
+    return sanitizeText(text);
+  } catch (error) {
+    console.error(`Error extracting text:`, error);
+    throw new Error(`Text extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
@@ -764,7 +937,7 @@ async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string)
 }
 
 async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
-  console.log(`Deleting chunks for document ${documentId} from Pinecone namespace: ${userId}`);
+  console.log(`Deleting chunks for document ${documentId} from Pinecone for user ${userId}`);
   
   try {
     // Get namespace-specific index
@@ -810,6 +983,7 @@ async function deleteDocumentChunksFromPinecone(documentId: string, userId: stri
     } else {
       console.log(`No vectors found for document ${documentId}`);
     }
+
   } catch (error) {
     console.error(`Error deleting chunks from Pinecone:`, error);
     throw error;
