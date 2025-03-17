@@ -12,10 +12,7 @@
   "builds": [
     {
       "src": "package.json",
-      "use": "@vercel/next",
-      "config": {
-        "includeFiles": ["workers/**"]
-      }
+      "use": "@vercel/next"
     }
   ],
   "version": 2,

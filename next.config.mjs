@@ -15,6 +15,17 @@ const nextConfig = {
       },
     ];
   },
+  // Set specific regions for serverless functions to ensure compatibility
+  regions: ['iad1'],
+  // Add webpack configuration to handle OpenAI package correctly
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      // Ensure OpenAI package is bundled correctly
+      config.externals = [...config.externals, 'openai'];
+    }
+    
+    return config;
+  },
 };
 
 export default nextConfig;
