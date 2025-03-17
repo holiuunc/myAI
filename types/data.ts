@@ -6,6 +6,9 @@ export const uploadedDocumentSchema = z.object({
   created_at: z.string(),
   content: z.string(),
   user_id: z.string(),
+  status: z.enum(["pending", "processing", "complete", "error"]).optional(),
+  progress: z.number().optional(),
+  error_message: z.string().optional(),
 });
 export type UploadedDocument = z.infer<typeof uploadedDocumentSchema>;
 

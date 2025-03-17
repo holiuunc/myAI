@@ -17,6 +17,7 @@ import type {
 
 import { streamedDoneSchema, streamedMessageSchema, streamedLoadingSchema, streamedErrorSchema } from "@/types/streaming";
 import { useAuth, type User } from "@/hooks/use-auth";
+import { getDocumentsClient, uploadDocumentClient, deleteDocumentClient } from "@/actions/client-actions";
 
 // In hooks/use-app.ts, modify the hook signature
 export default function useApp(externalUser?: User) {
@@ -38,6 +39,7 @@ export default function useApp(externalUser?: User) {
   const [indicatorState, setIndicatorState] = useState<LoadingIndicator[]>([]);
   const [input, setInput] = useState("");
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
 
   useEffect(() => {
     setWordCount(
@@ -48,51 +50,48 @@ export default function useApp(externalUser?: User) {
     );
   }, [messages]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
+  // Load documents when user changes
   useEffect(() => {
-    // Update document localStorage to be user-specific
-    if (!user) return;
-    
-    if (documents.length > 0) {
-      localStorage.setItem(`documents-${user.id}`, JSON.stringify(documents));
+    if (user) {
+      fetchDocuments();
     } else {
-      localStorage.removeItem(`documents-${user.id}`);
+      setDocuments([]);
     }
-  }, [documents, user?.id]);
+  }, [user?.id]);
 
   const fetchDocuments = async () => {
     if (!user) return;
     
     try {
-      // Fetch from API passing the user ID
-      const response = await fetch("/api/documents");
-      if (response.ok) {
-        const data = await response.json();
-        setDocuments(data.documents || []);
+      setIsLoadingDocuments(true);
+      // Use the client action to fetch documents
+      const result = await getDocumentsClient(user.id);
+      
+      if (result.success) {
+        setDocuments(result.documents || []);
+      } else {
+        console.error("Error fetching documents:", result.error);
       }
     } catch (error) {
       console.error("Error fetching documents:", error);
+    } finally {
+      setIsLoadingDocuments(false);
     }
   };
 
   const uploadDocument = async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
+    if (!user) throw new Error("User must be logged in to upload documents");
     
     try {
-      const response = await fetch("/api/documents/upload", {
-        method: "POST",
-        body: formData,
-      });
+      // Use the client action to upload document
+      const result = await uploadDocumentClient(file, user.id);
       
-      if (response.ok) {
-        const data = await response.json();
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-        setDocuments((prev: any) => [...prev, data.document]);
-        return data.document;
-      // biome-ignore lint/style/noUselessElse: <explanation>
+      if (result.success && result.document) {
+        // Add the new document to the list
+        setDocuments(prev => [result.document, ...prev]);
+        return result.document;
       } else {
-        throw new Error("Upload failed");
+        throw new Error(result.error || "Upload failed");
       }
     } catch (error) {
       console.error("Upload error:", error);
@@ -100,39 +99,39 @@ export default function useApp(externalUser?: User) {
     }
   };
 
-  // In your useApp hook
   const deleteDocument = async (id: string, force = false) => {
+    if (!user) return;
+    
     try {
-      const response = await fetch(`/api/documents/${id}${force ? '?force=true' : ''}`, {
-        method: 'DELETE',
-      });
+      // Use the client action to delete document
+      const result = await deleteDocumentClient(id, user.id);
       
-      if (response.status === 401) {
-        // User not authenticated, trigger login modal or redirect
-        return false;
+      if (result.success) {
+        // Remove the document from the list
+        setDocuments(prev => prev.filter(doc => doc.id !== id));
+      } else {
+        throw new Error(result.error || "Delete failed");
       }
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to delete document');
-      }
-      
-      // Refresh document list after successful deletion
-      await fetchDocuments();
-      return true;
     } catch (error) {
-      console.error("Failed to delete document:", error);
+      console.error("Delete error:", error);
       throw error;
     }
   };
 
-  const addUserMessage = (input: string) => {
+  const addUserMessage = (content: string): DisplayMessage => {
     const newUserMessage: DisplayMessage = {
       role: "user",
-      content: input,
+      content,
       citations: [],
     };
-    setMessages((prevMessages) => [...prevMessages, newUserMessage]);
+    setMessages((prevMessages) => {
+      const updatedMessages = [...prevMessages, newUserMessage];
+      // Save immediately after adding user message
+      if (user) {
+        saveMessages(updatedMessages);
+      }
+      return updatedMessages;
+    });
     return newUserMessage;
   };
 
@@ -142,7 +141,14 @@ export default function useApp(externalUser?: User) {
       content,
       citations,
     };
-    setMessages((prevMessages) => [...prevMessages, newAssistantMessage]);
+    setMessages((prevMessages) => {
+      const updatedMessages = [...prevMessages, newAssistantMessage];
+      // Save immediately after adding assistant message
+      if (user) {
+        saveMessages(updatedMessages);
+      }
+      return updatedMessages;
+    });
     return newAssistantMessage;
   };
 
@@ -342,28 +348,69 @@ export default function useApp(externalUser?: User) {
     }
   }, [user?.id]);
 
+  // Save messages to server with retry logic
+  const saveMessages = async (messagesToSave: DisplayMessage[]) => {
+    if (!user) return;
+    
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    const attemptSave = async (): Promise<boolean> => {
+      try {
+        const response = await fetch('/api/chats', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ messages: messagesToSave }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        // Also update localStorage as backup
+        const storageKey = `chatMessages-${user.id}`;
+        localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
+        
+        return true;
+      } catch (error) {
+        console.error(`Error saving messages (attempt ${retryCount + 1}):`, error);
+        return false;
+      }
+    };
+    
+    while (retryCount < maxRetries) {
+      const success = await attemptSave();
+      if (success) return;
+      
+      retryCount++;
+      if (retryCount < maxRetries) {
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+      }
+    }
+    
+    // If all retries failed, save to localStorage as fallback
+    const storageKey = `chatMessages-${user.id}`;
+    localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
+  };
+
+  // Remove the debounced save effect since we're saving immediately
   // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
-    if (!user || messages.length <= 1) return;
-    
-    // Use debounce with a longer delay (3-5 seconds)
-    const saveTimeout = setTimeout(() => {
-      saveMessages(messages);
-    }, 5000); // Increased from 1000ms to 5000ms
-    
-    return () => clearTimeout(saveTimeout);
-  }, [messages, user?.id]);
-
-  // Add this effect to save on unmount
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
-    useEffect(() => {
-    // Save when component unmounts (user navigates away or closes tab)
+    // Save when component unmounts
     return () => {
       if (user && messages.length > 1) {
+        // Use a synchronous localStorage save on unmount as backup
+        const storageKey = `chatMessages-${user.id}`;
+        localStorage.setItem(storageKey, JSON.stringify(messages));
+        
+        // Attempt server save, but don't wait for it
         saveMessages(messages);
       }
     };
-  }, []);
+  }, [messages, user]);
 
   const clearMessages = async () => {
     setMessages([initialAssistantMessage]);
@@ -409,26 +456,6 @@ export default function useApp(externalUser?: User) {
       if (storedMessages) {
         setMessages(JSON.parse(storedMessages));
       }
-    }
-  };
-
-  // Save messages to server
-  const saveMessages = async (messagesToSave: DisplayMessage[]) => {
-    if (!user) return;
-    
-    try {
-      await fetch('/api/chats', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ messages: messagesToSave }),
-      });
-    } catch (error) {
-      console.error("Error saving messages to server:", error);
-      // Fallback to localStorage if server request fails
-      const storageKey = `chatMessages-${user.id}`;
-      localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
     }
   };
 

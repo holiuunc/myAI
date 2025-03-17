@@ -1,3 +1,5 @@
+"use client";
+
 import { motion } from "framer-motion";
 import Image from "next/image";
 import { Formatting } from "./formatting";
@@ -7,6 +9,8 @@ import { useEffect, useRef, useCallback } from 'react';
 
 import type { DisplayMessage } from "@/types";
 import type { LoadingIndicator } from "@/types";
+import { Message } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 function AILogo() {
   return (
@@ -27,7 +31,7 @@ function UserMessage({ message }: { message: DisplayMessage }) {
       <motion.div
         whileHover={{ scale: 1.01 }}
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
-        className="px-3 py-1 bg-blue-500 rounded-2xl text-white max-w-[60%] shadow-sm hover:shadow-md transition-shadow duration-300"
+        className="px-3 py-1 bg-blue-500 dark:bg-blue-600 rounded-2xl text-white max-w-[60%] shadow-sm hover:shadow-md transition-shadow duration-300"
       >
         {message.content}
       </motion.div>
@@ -47,7 +51,7 @@ function AssistantMessage({ message }: { message: DisplayMessage }) {
       <motion.div
         whileHover={{ scale: 1.01 }}
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
-        className="px-3 py-1 bg-gray-200 rounded-2xl text-black max-w-[60%] shadow-sm hover:shadow-md transition-shadow duration-300"
+        className="px-3 py-1 bg-gray-200 dark:bg-gray-800 rounded-2xl text-black dark:text-white max-w-[60%] shadow-sm hover:shadow-md transition-shadow duration-300"
       >
         <Formatting message={message} />
       </motion.div>
@@ -58,7 +62,35 @@ function AssistantMessage({ message }: { message: DisplayMessage }) {
 function EmptyMessages() {
   return (
     <div className="flex flex-col flex-1 p-1 gap-3 justify-center items-center">
-      <p className="text-gray-500">Ask a question to start the conversation</p>
+      <p className="text-gray-500 dark:text-gray-400">Ask a question to start the conversation</p>
+    </div>
+  );
+}
+
+interface MessagesProps {
+  messages: Message[];
+}
+
+export function Messages({ messages }: MessagesProps) {
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {messages.map((message, index) => (
+        <div
+          key={index}
+          className={cn(
+            "flex w-full items-start gap-4 rounded-lg p-4",
+            message.role === "user"
+              ? "bg-accent/50"
+              : "bg-muted"
+          )}
+        >
+          <div className="flex-1 space-y-2">
+            <div className="prose prose-sm dark:prose-invert">
+              {message.content}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -71,14 +103,14 @@ export default function ChatMessages({
   indicatorState: LoadingIndicator[];
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  
-  const scrollToBottom = useCallback(() => {
+
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-  
+  };
+
   useEffect(() => {
     scrollToBottom();
-  }, [scrollToBottom]);
+  }, [messages]); // Scroll when messages change
 
   const showLoading =
     indicatorState.length > 0 &&

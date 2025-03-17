@@ -71,7 +71,7 @@ export function FileUploader({ onUpload, isUploading }: FileUploaderProps) {
         <p className="text-sm font-medium">
           {isDragging ? "Drop file here" : "Drag & drop a file"}
         </p>
-        <p className="text-xs text-gray-500 mb-3">PDF, DOCX, or TXT (Max 10MB)</p>
+        <p className="text-xs text-gray-500 mb-3">PDF, DOCX, or TXT (Max 50MB)</p>
         
         <Button 
           onClick={() => fileInputRef.current?.click()}
