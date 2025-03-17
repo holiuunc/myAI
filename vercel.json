@@ -10,7 +10,7 @@
     }
   },
   "version": 2,
-  "buildCommand": "pnpm run build",
-  "installCommand": "pnpm install",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
   "outputDirectory": ".next"
 } 
