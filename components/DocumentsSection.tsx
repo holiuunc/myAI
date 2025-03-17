@@ -100,7 +100,7 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
     if (needPolling) {
       pollingInterval.current = setInterval(() => {
         loadDocuments();
-      }, 1000); // Poll every 5 seconds
+      }, 2000); // Poll every 2 seconds
     }
     
     // Clean up on unmount

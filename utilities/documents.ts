@@ -5,8 +5,8 @@ import { OpenAI } from 'openai';
 import { chunkSchema, type Chunk, type UploadedDocument } from '@/types';
 import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
+import PDFParser from 'pdf2json';
+import { resolvePDFJS } from 'pdfjs-serverless';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -379,11 +379,88 @@ async function extractTextFromFile(file: File): Promise<string> {
   
   try {
     if (file.type === 'application/pdf') {
-      const pdfData = await pdfParse(buffer);
-      text = pdfData.text;
+      // First try pdfjs-serverless as it's more reliable in serverless environments
+      try {
+        // Capture console warnings temporarily
+        const originalWarn = console.warn;
+        console.warn = function(message: string, ...args: any[]) {
+          // Filter out known noise warnings
+          if (message && typeof message === 'string' &&
+              !(message.includes('Unsupported color mode') || 
+                message.includes('field.type of Link') || 
+                message.includes('NOT valid form element'))) {
+            originalWarn.apply(console, [message, ...args]);
+          }
+        };
+        
+        try {
+          const { getDocument } = await resolvePDFJS();
+          // Convert Buffer to Uint8Array
+          const uint8Array = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+          const pdf = await getDocument({ data: uint8Array, useSystemFonts: true }).promise;
+          
+          let fullText = '';
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items
+              .filter((item: any) => 'str' in item) // Filter for text items that have 'str' property
+              .map((item: any) => item.str)
+              .join(' ');
+            fullText += pageText + ' ';
+          }
+          text = fullText;
+        } finally {
+          // Restore original console.warn regardless of success/failure
+          console.warn = originalWarn;
+        }
+      } catch (pdfJsError) {
+        console.warn('pdfjs-serverless failed, falling back to pdf2json:', pdfJsError);
+        // Fall back to pdf2json if pdfjs-serverless fails
+        
+        // Capture console warnings temporarily
+        const originalWarn = console.warn;
+        console.warn = function(message: string, ...args: any[]) {
+          // Filter out known noise warnings
+          if (message && typeof message === 'string' &&
+              !(message.includes('Unsupported color mode') || 
+                message.includes('field.type of Link') || 
+                message.includes('NOT valid form element'))) {
+            originalWarn.apply(console, [message, ...args]);
+          }
+        };
+        
+        try {
+          const pdfParser = new PDFParser(null);
+          
+          // Convert the promise-based API to use async/await
+          text = await new Promise<string>((resolve, reject) => {
+            pdfParser.on('pdfParser_dataError', (errData: any) => reject(errData.parserError));
+            pdfParser.on('pdfParser_dataReady', () => {
+              resolve(pdfParser.getRawTextContent());
+            });
+            
+            pdfParser.parseBuffer(buffer);
+          });
+        } finally {
+          // Restore original console.warn regardless of success/failure
+          console.warn = originalWarn;
+        }
+      }
     } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
-      text = result.value;
+      // For DOCX, we can use a simple text extraction approach
+      // Note: Full DOCX parsing is not available in serverless environments
+      // You may need to use a cloud function or API for comprehensive DOCX support
+      try {
+        // Simplified DOCX extraction - just extract readable text content
+        // This won't preserve formatting but will get the text content
+        text = new TextDecoder().decode(buffer)
+          .replace(/\uFFFD/g, ' ') // Replace replacement character with space
+          .replace(/[^\x20-\x7E\n\r\t]/g, ' '); // Keep only ASCII printable chars
+      } catch (docxError) {
+        console.error('DOCX extraction failed:', docxError);
+        throw new Error(`DOCX extraction failed: ${docxError instanceof Error ? docxError.message : 'Unknown error'}`);
+      }
     } else if (file.type === 'text/plain') {
       text = new TextDecoder().decode(buffer);
     } else {

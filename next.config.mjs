@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    serverComponentsExternalPackages: ['pdf-parse', 'mammoth'],
+    serverComponentsExternalPackages: ['pdf2json', 'pdfjs-serverless'],
   },
   async rewrites() {
     return [
@@ -15,8 +15,6 @@ const nextConfig = {
       },
     ];
   },
-  // Set specific regions for serverless functions to ensure compatibility
-  regions: ['iad1'],
   // Add webpack configuration for proper bundling in serverless environment
   webpack: (config, { isServer }) => {
     if (isServer) {
