@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
 import PDFParser from 'pdf2json';
 import { resolvePDFJS } from 'pdfjs-serverless';
+import { createHash } from 'crypto';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -22,6 +23,33 @@ const openai = new OpenAI({
 // Queue to track documents being processed
 // In a production app, replace with a more robust solution like Redis or a database table
 const processingQueue = new Map<string, boolean>();
+
+// Simple in-memory cache for embeddings
+const embeddingCache = new Map();
+
+// Hash function for caching
+function hashText(text: string): string {
+  return createHash('md5').update(text).digest('hex');
+}
+
+// OpenAI embedding generation with caching
+async function generateEmbeddingWithCache(text: string) {
+  const hash = hashText(text);
+  
+  if (embeddingCache.has(hash)) {
+    return embeddingCache.get(hash);
+  }
+  
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-ada-002',
+    input: text,
+  });
+  
+  const embedding = response.data[0].embedding;
+  embeddingCache.set(hash, embedding);
+  
+  return embedding;
+}
 
 // Update the getDocuments function to be user-specific
 export async function getDocuments(userId?: string): Promise<UploadedDocument[]> {
@@ -844,7 +872,7 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
 async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string): Promise<void> {
-  console.log(`Storing ${embeddedChunks.length} chunks in Pinecone using API route`);
+  console.log(`Storing ${embeddedChunks.length} chunks in Pinecone directly`);
   
   if (!embeddedChunks.length) {
     console.warn('No chunks to store in Pinecone');
@@ -854,133 +882,57 @@ async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string)
   // Get the user ID from the first chunk
   const userId = embeddedChunks[0].user_id;
   
-  // Prepare chunks to send to the API
-  const chunksToProcess = embeddedChunks.map((chunk: any) => ({
-    text: chunk.text,
-    pre_context: chunk.pre_context,
-    post_context: chunk.post_context,
-    source_url: chunk.source_url,
-    source_description: chunk.source_description,
-    order: chunk.order,
-    user_id: chunk.user_id,
-  }));
-  
-  // Set batch size to 200 as previously determined optimal value
-  // This keeps within OpenAI's token limits while optimizing speed
-  const batchSize = 200; // Based on previous optimization
-  const batches = [];
-  
-  for (let i = 0; i < chunksToProcess.length; i += batchSize) {
-    batches.push(chunksToProcess.slice(i, i + batchSize));
-  }
-  
-  console.log(`Processing chunks in ${batches.length} batches of max ${batchSize} chunks each`);
-  
-  let totalChunksProcessed = 0;
-  
-  // Get the base URL for the API
-  // In server-side code, we need to use the full URL, not a relative one
-  let baseUrl = 'http://localhost:3000';
-  
-  // In production environments
-  if (process.env.VERCEL_URL) {
-    baseUrl = `https://${process.env.VERCEL_URL}`;
-  } else if (process.env.NEXTAUTH_URL) {
-    baseUrl = process.env.NEXTAUTH_URL;
-  }
+  try {
+    // Get namespace-specific index
+    const namespaceIndex = pineconeIndex.namespace(userId);
     
-  const apiUrl = `${baseUrl}/api/documents/process`;
-  
-  // Calculate progress increments (from 25% to 95%)
-  const progressStart = 25;
-  const progressMax = 95;
-  
-  // Process batches serially to ensure progress updates are sequential and visible
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    const batchNumber = i + 1;
+    // Process chunks in batches with reasonable size
+    const batchSize = 100;
+    const batches = [];
     
-    try {
-      // Calculate a more dramatic progress increment for better visibility
-      // Progress will jump by larger amounts for more visible UI feedback
-      const currentProgress = Math.round(progressStart + ((progressMax - progressStart) * i / batches.length));
-      
-      // Update progress before processing batch
-      if (documentId) {
-        // Force immediate progress update with direct status update
-        console.log(`Setting progress to ${currentProgress}% before processing batch ${batchNumber}/${batches.length}`);
-        await supabaseAdmin
-          .from('documents')
-          .update({
-            progress: currentProgress,
-            status: 'processing',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', documentId);
-      }
-      
-      console.log(`Processing batch ${batchNumber}/${batches.length} with ${batch.length} chunks`);
-      
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          chunks: batch,
-          indexName: PINECONE_INDEX_NAME, // Use the configured Pinecone index name
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to process chunks: ${errorText}`);
-      }
-      
-      const result = await response.json();
-      console.log(`Batch ${batchNumber} processed successfully: ${result.chunksProcessed} chunks`);
-      
-      totalChunksProcessed += (result.chunksProcessed || batch.length);
-      
-      // Update progress after processing batch with a higher value
-      if (documentId && batchNumber < batches.length) {
-        const nextProgress = Math.round(progressStart + ((progressMax - progressStart) * (i + 0.5) / batches.length));
-        console.log(`Setting progress to ${nextProgress}% after processing batch ${batchNumber}/${batches.length}`);
-        
-        // Use direct update to ensure status and progress are updated
-        await supabaseAdmin
-          .from('documents')
-          .update({
-            progress: nextProgress,
-            status: 'processing',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', documentId);
-      }
-      
-      // Small delay between batches to allow UI to update
-      if (batchNumber < batches.length) {
-        await new Promise(resolve => setTimeout(resolve, 750));
-      }
-    } catch (error) {
-      console.error(`Error processing batch ${batchNumber}:`, error);
-      throw error;
+    for (let i = 0; i < embeddedChunks.length; i += batchSize) {
+      batches.push(embeddedChunks.slice(i, i + batchSize));
     }
-  }
-  
-  console.log('Successfully stored all chunks in Pinecone via API route');
-  
-  // Final progress update before completion
-  if (documentId) {
-    console.log(`Setting progress to ${progressMax}% before finalizing`);
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        progress: progressMax,
-        status: 'processing',
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
+    
+    // Generate embeddings and process batches
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      console.log(`Processing batch ${i+1}/${batches.length} with ${batch.length} chunks`);
+      
+      // Generate embeddings
+      const batchEmbeddings = await Promise.all(
+        batch.map(chunk => generateEmbeddingWithCache(chunk.text))
+      );
+      
+      // Prepare vectors for Pinecone
+      const vectors = batch.map((chunk, index) => ({
+        id: `${chunk.source_url}-${chunk.order}`,
+        values: batchEmbeddings[index],
+        metadata: {
+          text: chunk.text,
+          pre_context: chunk.pre_context || '',
+          post_context: chunk.post_context || '',
+          source_url: chunk.source_url,
+          source_description: chunk.source_description || '',
+          order: chunk.order || 0,
+          user_id: chunk.user_id,
+        },
+      }));
+      
+      // Upload to Pinecone directly
+      await namespaceIndex.upsert(vectors);
+      
+      // Update document progress if we have a document ID
+      if (documentId) {
+        const progress = Math.round(25 + ((95 - 25) * (i + 1) / batches.length));
+        await updateDocumentProgress(documentId, progress);
+      }
+    }
+    
+    console.log('Successfully stored all chunks in Pinecone');
+  } catch (error) {
+    console.error('Error storing chunks in Pinecone:', error);
+    throw error;
   }
 }
 
@@ -988,16 +940,50 @@ async function deleteDocumentChunksFromPinecone(documentId: string, userId: stri
   console.log(`Deleting chunks for document ${documentId} from Pinecone for user ${userId}`);
   
   try {
-    // Use filter-based deletion which is more efficient and direct
-    // This eliminates the need for namespace-based operations entirely
-    await pineconeIndex.deleteMany({
-      filter: {
-        source_url: documentId,
-        user_id: userId
-      }
+    // Get namespace-specific index
+    const namespaceIndex = pineconeIndex.namespace(userId);
+    
+    // Create a dummy vector for querying (using OpenAI's embedding dimension)
+    const dummyVector = Array(1536).fill(0);
+    
+    // Search for chunks with the document ID in metadata
+    console.log(`Searching for vectors with document ID: ${documentId}`);
+    const queryResponse = await namespaceIndex.query({
+      vector: dummyVector,
+      topK: 10000,
+      filter: { 
+        source_url: { $eq: documentId } 
+      },
+      includeMetadata: true
     });
     
-    console.log(`Successfully deleted chunks for document ${documentId}`);
+    // Extract IDs to delete
+    const vectorIds = queryResponse.matches.map(match => match.id);
+    
+    if (vectorIds.length > 0) {
+      console.log(`Found ${vectorIds.length} vectors to delete`);
+      
+      // Delete in batches of 1000 or fewer (Pinecone's limit)
+      const batchSize = 1000;
+      const batches = [];
+      
+      for (let i = 0; i < vectorIds.length; i += batchSize) {
+        batches.push(vectorIds.slice(i, i + batchSize));
+      }
+      
+      console.log(`Deleting vectors in ${batches.length} batches`);
+      
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        console.log(`Deleting batch ${i + 1}/${batches.length} with ${batch.length} vectors`);
+        await namespaceIndex.deleteMany(batch);
+      }
+      
+      console.log(`Successfully deleted ${vectorIds.length} chunks for document ${documentId}`);
+    } else {
+      console.log(`No vectors found for document ${documentId}`);
+    }
+
   } catch (error) {
     console.error(`Error deleting chunks from Pinecone:`, error);
     throw error;

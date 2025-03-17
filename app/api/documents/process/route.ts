@@ -40,6 +40,29 @@ async function generateEmbeddingWithCache(text: string) {
   return embedding;
 }
 
+// Add retry utility function at the top with proper TypeScript typing
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay = 1000): Promise<T> {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      console.log(`Attempt ${attempt} failed, ${maxRetries - attempt} retries left`);
+      lastError = error;
+      
+      if (attempt < maxRetries) {
+        console.log(`Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        // Exponential backoff
+        delay *= 2;
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
 async function processChunks(chunks: any[], userId: string, indexName: string) {
   try {
     // Additional logging to debug
@@ -68,15 +91,28 @@ async function processChunks(chunks: any[], userId: string, indexName: string) {
     
     // Process batches with embedding cache
     const processedBatches = await Promise.all(
-      batches.map(async (batch) => {
-        const batchEmbeddings = await Promise.all(
-          batch.map(chunk => generateEmbeddingWithCache(chunk.text))
-        );
-        
-        return batch.map((chunk, index) => ({
-          ...chunk,
-          embedding: batchEmbeddings[index],
-        }));
+      batches.map(async (batch, batchIndex) => {
+        try {
+          console.log(`Generating embeddings for batch ${batchIndex + 1}/${batches.length}`);
+          const batchEmbeddings = await Promise.all(
+            batch.map(async (chunk, chunkIndex) => {
+              try {
+                return await generateEmbeddingWithCache(chunk.text);
+              } catch (error) {
+                console.error(`Error generating embedding for chunk ${chunkIndex} in batch ${batchIndex + 1}:`, error);
+                throw error;
+              }
+            })
+          );
+          
+          return batch.map((chunk, index) => ({
+            ...chunk,
+            embedding: batchEmbeddings[index],
+          }));
+        } catch (error) {
+          console.error(`Error processing batch ${batchIndex + 1}:`, error);
+          throw error;
+        }
       })
     );
     
@@ -84,28 +120,79 @@ async function processChunks(chunks: any[], userId: string, indexName: string) {
     console.log(`Generated embeddings for ${embeddedChunks.length} chunks`);
     
     // Prepare vectors for Pinecone
-    const vectors = embeddedChunks.map(chunk => ({
-      id: `${chunk.source_url}-${chunk.order}`,
-      values: chunk.embedding,
-      metadata: {
-        text: chunk.text,
-        pre_context: chunk.pre_context || '',
-        post_context: chunk.post_context || '',
-        source_url: chunk.source_url,
-        source_description: chunk.source_description || '',
-        order: chunk.order || 0,
-        user_id: chunk.user_id,
-      },
-    }));
+    const vectors = embeddedChunks.map((chunk, index) => {
+      // Validate embedding is an array of numbers
+      if (!Array.isArray(chunk.embedding)) {
+        console.error(`Invalid embedding for chunk ${index}:`, chunk.embedding);
+        throw new Error(`Invalid embedding for chunk ${index}`);
+      }
+      
+      return {
+        id: `${chunk.source_url}-${chunk.order}`,
+        values: chunk.embedding,
+        metadata: {
+          text: chunk.text,
+          pre_context: chunk.pre_context || '',
+          post_context: chunk.post_context || '',
+          source_url: chunk.source_url,
+          source_description: chunk.source_description || '',
+          order: chunk.order || 0,
+          user_id: chunk.user_id,
+        },
+      };
+    });
     
-    // Upload to Pinecone
-    console.log(`Upserting ${vectors.length} vectors to Pinecone`);
-    await namespaceIndex.upsert(vectors);
-    console.log('Upsert to Pinecone completed successfully');
-    
-    return { success: true, chunksProcessed: chunks.length };
+    // Replace the try/catch block around the upsert with retry logic
+    try {
+      // Upload to Pinecone with retry
+      console.log(`Upserting ${vectors.length} vectors to Pinecone`);
+      await withRetry(async () => {
+        try {
+          // For larger batches, split into smaller chunks to avoid timeout
+          const upsertBatchSize = 100;
+          for (let i = 0; i < vectors.length; i += upsertBatchSize) {
+            const vectorBatch = vectors.slice(i, i + upsertBatchSize);
+            console.log(`Upserting batch ${Math.ceil((i+1)/upsertBatchSize)}/${Math.ceil(vectors.length/upsertBatchSize)} (${vectorBatch.length} vectors)`);
+            await namespaceIndex.upsert(vectorBatch);
+          }
+          console.log('Upsert to Pinecone completed successfully');
+        } catch (error) {
+          console.error('Error during Pinecone upsert:', error);
+          if (error instanceof Error) {
+            console.error('Error details:', {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
+          throw error;
+        }
+      }, 3, 2000);
+      
+      return { success: true, chunksProcessed: chunks.length };
+    } catch (error) {
+      console.error('Error processing chunks:', error);
+      if (error instanceof Error) {
+        console.error('Full error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack,
+        });
+      }
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
   } catch (error) {
     console.error('Error processing chunks:', error);
+    if (error instanceof Error) {
+      console.error('Full error details:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Unknown error' 

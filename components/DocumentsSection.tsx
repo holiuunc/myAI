@@ -32,13 +32,16 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
       const result = await getDocumentsClient(userId);
       
       if (result.success) {
+        console.log(`Successfully loaded ${result.documents?.length || 0} documents`);
         setDocuments(result.documents || []);
       } else {
+        console.error('Error returned from getDocumentsClient:', result.error);
         throw new Error(result.error || 'Failed to load documents');
       }
     } catch (err) {
       console.error('Error loading documents:', err);
       setError(err instanceof Error ? err.message : 'Failed to load documents');
+      // Keep the existing documents if there was an error
     } finally {
       setIsLoading(false);
     }
@@ -50,17 +53,26 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
     }
     
     try {
+      setError(null);
       console.log('Deleting document:', documentId);
       const result = await deleteDocumentClient(documentId, userId);
       
       if (result.success) {
-        // Refresh the documents list
-        loadDocuments();
+        console.log('Document deleted successfully');
+        
+        // Update the UI immediately by removing the document
+        setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== documentId));
+        
+        // Also refresh the documents list to be sure
+        setTimeout(() => {
+          loadDocuments();
+        }, 500);
       } else {
+        console.error('Error deleting document:', result.error);
         throw new Error(result.error || 'Failed to delete document');
       }
     } catch (err) {
-      console.error('Error deleting document:', err);
+      console.error('Error in handleDeleteDocument:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete document');
     }
   };

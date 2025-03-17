@@ -1,32 +1,28 @@
 import { NextResponse } from 'next/server';
 import { deleteDocument } from '@/utilities/documents';
-import { getAuthenticatedUser } from '@/middleware/auth';
 
 export async function DELETE(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  // Get the authenticated user first
-  const user = await getAuthenticatedUser();
+  const id = params.id;
+  const { searchParams } = new URL(req.url);
+  const userId = searchParams.get('userId');
+  const forceDelete = searchParams.get('force') === 'true';
   
-  if (!user) {
+  console.log(`API route: DELETE /api/documents/${id} called - userId: ${userId || 'not provided'}, force: ${forceDelete}`);
+  
+  if (!userId) {
     return NextResponse.json(
-      { error: 'Authentication required' },
-      { status: 401 }
+      { error: 'User ID is required' },
+      { status: 400 }
     );
   }
   
-  const id = params.id;
-  
-  // Check if this is a force delete (from URL search params)
-  const { searchParams } = new URL(req.url);
-  const forceDelete = searchParams.get('force') === 'true';
-  
-  console.log(`API route: DELETE /api/documents/${id} called (force: ${forceDelete}) by user ${user.id}`);
-  
   try {
     // Pass the user ID to the deleteDocument function
-    await deleteDocument(id, user.id, forceDelete);
+    console.log(`Attempting to delete document ${id} for user ${userId}`);
+    await deleteDocument(id, userId, forceDelete);
     console.log(`Successfully deleted document with ID: ${id}`);
     return NextResponse.json({ success: true, id });
   } catch (error) {

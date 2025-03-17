@@ -13,43 +13,65 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    setError(null);
+    
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
     
     // Check file type
     if (!ALLOWED_FILE_TYPES.includes(file.type)) {
       setError('File type not supported. Please upload PDF, DOCX, or text files.');
+      setSelectedFile(null);
       return;
     }
     
     // Check file size
     if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
       setError(`File exceeds maximum size of ${MAX_FILE_SIZE_MB}MB`);
+      setSelectedFile(null);
+      return;
+    }
+    
+    // Store the file for later upload
+    setSelectedFile(file);
+  };
+  
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      setError('Please select a file to upload');
+      return;
+    }
+    
+    if (!userId) {
+      setError('User ID is required');
       return;
     }
     
     setIsUploading(true);
     setError(null);
     
-    // Upload the file
+    // Simulate progress while uploading
+    // This gives immediate feedback to the user
+    const progressInterval = setInterval(() => {
+      setProgress(prev => {
+        const newProgress = prev + 5;
+        if (newProgress >= 90) {
+          clearInterval(progressInterval);
+          return 90; // Cap at 90% until complete
+        }
+        return newProgress;
+      });
+    }, 300);
+    
     try {
-      // Simulate progress while uploading
-      // This gives immediate feedback to the user
-      const progressInterval = setInterval(() => {
-        setProgress(prev => {
-          const newProgress = prev + 5;
-          if (newProgress >= 90) {
-            clearInterval(progressInterval);
-            return 90; // Cap at 90% until complete
-          }
-          return newProgress;
-        });
-      }, 300);
-      
-      const result = await uploadDocumentClient(file, userId);
+      const result = await uploadDocumentClient(selectedFile, userId);
       
       clearInterval(progressInterval);
       
@@ -67,9 +89,13 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
       }
     } catch (err) {
       console.error('Upload error:', err);
+      clearInterval(progressInterval);
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setIsUploading(false);
+      
+      // Reset selected file
+      setSelectedFile(null);
       
       // Reset file input
       if (fileInputRef.current) {
@@ -105,13 +131,25 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
             <Upload className="h-10 w-10 text-gray-400 mb-2" />
           )}
           <span className="text-sm font-medium">
-            {isUploading ? 'Uploading...' : 'Click to upload PDF, DOCX, or text files'}
+            {isUploading ? 'Uploading...' : 'Click to select PDF, DOCX, or text files'}
           </span>
           <span className="text-xs text-gray-500 mt-1">
             Max file size: {MAX_FILE_SIZE_MB}MB
           </span>
         </label>
       </div>
+      
+      {selectedFile && !isUploading && (
+        <div className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
+          <div className="flex items-center">
+            <FileText className="h-5 w-5 text-gray-500 mr-2" />
+            <span className="text-sm">{selectedFile.name}</span>
+          </div>
+          <Button onClick={handleUpload} size="sm">
+            Upload File
+          </Button>
+        </div>
+      )}
       
       {isUploading && (
         <div className="space-y-2">
