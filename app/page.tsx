@@ -40,8 +40,24 @@ export default function Chat() {
         <div className="flex flex-col max-w-screen-xl w-full h-full">
           <ResizablePanelGroup direction="horizontal" className="h-full">
             <ResizablePanel defaultSize={75} minSize={50}>
-              <div className="p-5 h-full overflow-auto">
-                <ChatMessages messages={messages} indicatorState={indicatorState} />
+              <div className="p-5 h-full overflow-auto relative">
+                <div className={`h-full ${!user ? 'blur-sm pointer-events-none' : ''}`}>
+                  <ChatMessages messages={messages} indicatorState={indicatorState} />
+                </div>
+                
+                {!user && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="bg-background/90 p-6 rounded-lg shadow-lg text-center">
+                      <h2 className="text-xl font-semibold mb-3">Sign in to Chat</h2>
+                      <p className="text-muted-foreground mb-4">
+                        Please sign in or create an account to use the chat.
+                      </p>
+                      <Button onClick={() => setLoginModalOpen(true)}>
+                        Sign in
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </ResizablePanel>
             <ResizableHandle withHandle />
@@ -72,6 +88,7 @@ export default function Chat() {
         handleSubmit={handleSubmit}
         input={input}
         isLoading={isLoading}
+        disabled={!user}
       />
       <LoginModal isOpen={loginModalOpen} onClose={() => setLoginModalOpen(false)} />
     </>

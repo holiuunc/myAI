@@ -9,6 +9,7 @@ interface ChatInputProps {
   handleSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
   input: string;
   isLoading: boolean;
+  disabled?: boolean;
 }
 
 export default function ChatInput({
@@ -16,6 +17,7 @@ export default function ChatInput({
   handleSubmit,
   input,
   isLoading,
+  disabled = false,
 }: ChatInputProps) {
   return (
     <div className="fixed bottom-0 w-full p-4 bg-background border-t">
@@ -24,10 +26,11 @@ export default function ChatInput({
           type="text"
           value={input}
           onChange={handleInputChange}
-          placeholder="Type a message..."
+          placeholder={disabled ? "Sign in to start chatting..." : "Type a message..."}
           className="flex-1 p-2 rounded-md border bg-background focus:outline-none focus:ring-2"
+          disabled={disabled || isLoading}
         />
-        <Button type="submit" disabled={isLoading || !input.trim()}>
+        <Button type="submit" disabled={disabled || isLoading || !input.trim()}>
           <SendHorizontal className="h-4 w-4" />
           <span className="sr-only">Send message</span>
         </Button>
