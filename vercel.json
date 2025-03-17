@@ -9,12 +9,6 @@
       "maxDuration": 30
     }
   },
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
   "version": 2,
   "buildCommand": "pnpm run build",
   "installCommand": "pnpm install",
