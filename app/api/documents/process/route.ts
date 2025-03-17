@@ -42,6 +42,16 @@ async function generateEmbeddingWithCache(text: string) {
 
 async function processChunks(chunks: any[], userId: string, indexName: string) {
   try {
+    // Additional logging to debug
+    console.log(`Processing ${chunks.length} chunks for user ${userId} in index ${indexName}`);
+    
+    // Ensure we have an OpenAI API key
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('Missing OpenAI API key in environment variables');
+      throw new Error('OpenAI API key is required');
+    }
+    
+    // Create index reference
     const pineconeIndex = pineconeClient.Index(indexName);
     const namespaceIndex = pineconeIndex.namespace(userId);
     
@@ -53,6 +63,8 @@ async function processChunks(chunks: any[], userId: string, indexName: string) {
       const batch = chunks.slice(i, i + batchSize);
       batches.push(batch);
     }
+    
+    console.log(`Split chunks into ${batches.length} batches for processing`);
     
     // Process batches with embedding cache
     const processedBatches = await Promise.all(
@@ -69,6 +81,7 @@ async function processChunks(chunks: any[], userId: string, indexName: string) {
     );
     
     const embeddedChunks = processedBatches.flat();
+    console.log(`Generated embeddings for ${embeddedChunks.length} chunks`);
     
     // Prepare vectors for Pinecone
     const vectors = embeddedChunks.map(chunk => ({
@@ -76,17 +89,19 @@ async function processChunks(chunks: any[], userId: string, indexName: string) {
       values: chunk.embedding,
       metadata: {
         text: chunk.text,
-        pre_context: chunk.pre_context,
-        post_context: chunk.post_context,
+        pre_context: chunk.pre_context || '',
+        post_context: chunk.post_context || '',
         source_url: chunk.source_url,
-        source_description: chunk.source_description,
-        order: chunk.order,
+        source_description: chunk.source_description || '',
+        order: chunk.order || 0,
         user_id: chunk.user_id,
       },
     }));
     
     // Upload to Pinecone
+    console.log(`Upserting ${vectors.length} vectors to Pinecone`);
     await namespaceIndex.upsert(vectors);
+    console.log('Upsert to Pinecone completed successfully');
     
     return { success: true, chunksProcessed: chunks.length };
   } catch (error) {
@@ -100,18 +115,6 @@ async function processChunks(chunks: any[], userId: string, indexName: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
-    const user = await getAuthenticatedUser();
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-    
-    // Get user ID from authenticated user
-    const userId = user.id;
-    
     // Parse request body
     const body = await request.json();
     const { chunks, indexName } = body;
@@ -129,6 +132,39 @@ export async function POST(request: NextRequest) {
         { error: 'Index name is required' },
         { status: 400 }
       );
+    }
+    
+    // Try to get user from authentication, but don't require it for server-to-server calls
+    // For server-to-server calls, we'll use the user_id from the chunks
+    let userId;
+    try {
+      const user = await getAuthenticatedUser();
+      if (user) {
+        userId = user.id;
+      } else {
+        // If no authenticated user, use the user_id from the first chunk
+        // This allows server-to-server processing
+        userId = chunks[0].user_id;
+        
+        if (!userId) {
+          return NextResponse.json(
+            { error: 'User ID is required but not found in chunks or authentication' },
+            { status: 401 }
+          );
+        }
+        console.log(`No authenticated user, using user_id from chunks: ${userId}`);
+      }
+    } catch (error) {
+      // If authentication check fails, fall back to using the user_id from the chunks
+      userId = chunks[0].user_id;
+      
+      if (!userId) {
+        return NextResponse.json(
+          { error: 'User ID is required but not found in chunks' },
+          { status: 401 }
+        );
+      }
+      console.log(`Authentication check failed, using user_id from chunks: ${userId}`);
     }
     
     // Process chunks

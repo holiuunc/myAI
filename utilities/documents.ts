@@ -160,40 +160,49 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
       })
       .eq('id', documentId);
     
-    // 2. Process chunks in worker thread
-    const workerResult = await new Promise((resolve, reject) => {
-      const worker = new Worker(path.join(process.cwd(), 'workers', 'documentProcessor.mjs'));
+    // 2. Process chunks using the storeChunksInPinecone function instead of worker threads
+    try {
+      // Create a proper structure for chunks before embedding
+      const preparedChunks = chunks.map(chunk => ({
+        text: chunk.text,
+        pre_context: chunk.pre_context,
+        post_context: chunk.post_context,
+        source_url: chunk.source_url,
+        source_description: chunk.source_description,
+        order: chunk.order,
+        user_id: chunk.user_id,
+      }));
       
-      worker.on('message', (result) => {
-        worker.terminate();
-        if (result.success) {
-          resolve(result);
-        } else {
-          reject(new Error(result.error));
-        }
-      });
+      // Store the chunks directly using the function we now use for the API route
+      await storeChunksInPinecone(preparedChunks);
       
-      worker.on('error', reject);
+      // Update document status to complete
+      await supabaseAdmin
+        .from('documents')
+        .update({
+          status: 'complete',
+          progress: 100,
+          vector_count: chunks.length,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', documentId);
       
-      worker.postMessage({
-        chunks,
-        userId,
-        indexName: PINECONE_INDEX_NAME
-      });
-    });
-    
-    // Update document status to complete
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        status: 'complete',
-        progress: 100,
-        vector_count: chunks.length,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
-    
-    console.log(`Completed processing for document ${documentId}`);
+      console.log(`Completed processing for document ${documentId}`);
+    } catch (error) {
+      console.error(`Error processing document ${documentId}:`, error);
+      
+      // Update document status to error
+      await supabaseAdmin
+        .from('documents')
+        .update({
+          status: 'error',
+          error_message: error instanceof Error ? error.message : String(error),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', documentId);
+      
+      throw error;
+    }
   } catch (error) {
     console.error(`Error processing document ${documentId}:`, error);
     
@@ -524,20 +533,31 @@ async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
   
   let batchCounter = 0;
   
+  // Get the base URL for the API
+  // In server-side code, we need to use the full URL, not a relative one
+  // We'll use the NEXTAUTH_URL environment variable which should contain the site's base URL
+  // This is typically something like https://your-app.vercel.app in production
+  // or http://localhost:3000 in development
+  const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL 
+    ? `https://${process.env.VERCEL_URL}`
+    : 'http://localhost:3000';
+    
+  const apiUrl = `${baseUrl}/api/documents/process`;
+  
   // Send each batch to the API route
   for (const batch of batches) {
     batchCounter++;
     console.log(`Processing batch ${batchCounter}/${batches.length} with ${batch.length} chunks`);
     
     try {
-      const response = await fetch('/api/documents/process', {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           chunks: batch,
-          indexName: 'myai', // Your Pinecone index name
+          indexName: PINECONE_INDEX_NAME, // Use the configured Pinecone index name
         }),
       });
       
