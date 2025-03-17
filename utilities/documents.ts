@@ -7,6 +7,8 @@ import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import { Worker } from 'worker_threads';
+import path from 'path';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -145,8 +147,8 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
       document.id, 
       document.title,
       document.user_id,
-      1500,  // Increased chunk size for fewer API calls
-      150    // Reduced overlap while maintaining context
+      2000,  // Increased chunk size for fewer API calls
+      200    // Reduced overlap while maintaining context
     );
     
     // Update progress after chunking
@@ -158,53 +160,27 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
       })
       .eq('id', documentId);
     
-    // 2. Process chunks in parallel with optimal batch sizes
-    const totalChunks = chunks.length;
-    const embeddedChunks = [];
-    
-    // Process in larger batches (20 chunks per batch)
-    const batchSize = 20;
-    const batches = [];
-    
-    for (let i = 0; i < chunks.length; i += batchSize) {
-      const batch = chunks.slice(i, i + batchSize);
-      batches.push(batch);
-    }
-    
-    // Process batches in parallel with rate limiting
-    const processedBatches = await Promise.all(
-      batches.map(async (batch, batchIndex) => {
-        // Add a small delay between batches to prevent rate limiting
-        if (batchIndex > 0) {
-          await new Promise(resolve => setTimeout(resolve, 200));
+    // 2. Process chunks in worker thread
+    const workerResult = await new Promise((resolve, reject) => {
+      const worker = new Worker(path.join(process.cwd(), 'workers', 'documentProcessor.mjs'));
+      
+      worker.on('message', (result) => {
+        worker.terminate();
+        if (result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result.error));
         }
-        
-        const batchEmbeddings = await openai.embeddings.create({
-          model: 'text-embedding-ada-002',
-          input: batch.map(chunk => chunk.text),
-        });
-        
-        return batch.map((chunk, index) => ({
-          ...chunk,
-          embedding: batchEmbeddings.data[index].embedding,
-        }));
-      })
-    );
-    
-    // Flatten the results
-    embeddedChunks.push(...processedBatches.flat());
-    
-    // Update progress to 70%
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        progress: 70,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
-    
-    // 3. Store chunks in Pinecone with optimized batching
-    await storeChunksInPinecone(embeddedChunks);
+      });
+      
+      worker.on('error', reject);
+      
+      worker.postMessage({
+        chunks,
+        userId,
+        indexName: PINECONE_INDEX_NAME
+      });
+    });
     
     // Update document status to complete
     await supabaseAdmin
@@ -341,28 +317,175 @@ async function extractTextFromFile(file: File): Promise<string> {
   }
 }
 
-export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 1000, overlap = 200): any[] {
-  const chunks = [];
-  let i = 0;
+// Helper function to find the best split point in a text
+function findSplitPoint(text: string, targetLength: number): number {
+  // If text is shorter than target, return full length
+  if (text.length <= targetLength) return text.length;
   
-  while (i < content.length) {
-    const chunkText = sanitizeText(content.slice(i, i + chunkSize));
-    const preContext = i > 0 ? sanitizeText(content.slice(Math.max(0, i - overlap), i)) : '';
-    const postContext = sanitizeText(content.slice(i + chunkSize, Math.min(content.length, i + chunkSize + overlap)));
-    
-    chunks.push({
-      text: chunkText,
-      pre_context: preContext,
-      post_context: postContext,
-      source_url: documentId,
-      source_description: documentTitle,
-      order: Math.floor(i / chunkSize),
-      user_id: userId,
-    });
-    
-    i += chunkSize - overlap;
+  // Look for sentence end within reasonable bounds
+  const searchEnd = Math.min(targetLength + 100, text.length);
+  const searchText = text.slice(0, searchEnd);
+  
+  // Try to find sentence boundary
+  const sentences = searchText.match(/[.!?]\s+/g);
+  if (sentences) {
+    let lastIndex = 0;
+    for (const match of sentences) {
+      const nextIndex = searchText.indexOf(match, lastIndex) + match.length;
+      if (nextIndex > targetLength) {
+        return lastIndex || targetLength;
+      }
+      lastIndex = nextIndex;
+    }
+    return lastIndex || targetLength;
   }
   
+  // Fall back to word boundary if no sentence boundary found
+  const words = searchText.slice(0, targetLength + 20).split(/\s+/);
+  let length = 0;
+  for (let i = 0; i < words.length; i++) {
+    const nextLength = length + words[i].length + (i > 0 ? 1 : 0); // +1 for space
+    if (nextLength > targetLength) {
+      return length || targetLength;
+    }
+    length = nextLength;
+  }
+  
+  // If no good boundary found, use targetLength
+  return targetLength;
+}
+
+export function splitIntoChunks(content: string, documentId: string, documentTitle: string, userId: string, chunkSize = 2000, overlap = 200): any[] {
+  if (!content || typeof content !== 'string') {
+    console.warn('Invalid content provided to splitIntoChunks');
+    return [];
+  }
+
+  // Clean the content - normalize whitespace but preserve paragraph breaks
+  const cleanContent = content
+    .replace(/\r\n/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(/[ ]{2,}/g, ' ')
+    .trim();
+
+  if (cleanContent.length === 0) {
+    console.warn('Content is empty after cleaning');
+    return [];
+  }
+
+  // Constants and validation
+  const MIN_CHUNK_SIZE = 100;
+  const MAX_CHUNK_SIZE = 8000; // Conservative limit well below OpenAI's token limit
+  const effectiveChunkSize = Math.min(Math.max(chunkSize, MIN_CHUNK_SIZE), MAX_CHUNK_SIZE);
+  const effectiveOverlap = Math.min(overlap, Math.floor(effectiveChunkSize / 4));
+
+  const chunks: Array<{
+    text: string;
+    pre_context: string;
+    post_context: string;
+    source_url: string;
+    source_description: string;
+    order: number;
+    user_id: string;
+  }> = [];
+
+  // Split into initial paragraphs
+  const paragraphs = cleanContent.split(/\n\s*\n/).filter(p => p.trim());
+  let currentChunk = '';
+  let processedChars = 0;
+
+  function createChunk(text: string, isLastChunk: boolean = false) {
+    if (!text.trim()) return;
+    
+    chunks.push({
+      text: text.trim(),
+      pre_context: chunks.length > 0 ? chunks[chunks.length - 1].text.slice(-effectiveOverlap) : '',
+      post_context: '', // Will be updated later
+      source_url: documentId,
+      source_description: documentTitle,
+      order: chunks.length,
+      user_id: userId
+    });
+    processedChars += text.length;
+  }
+
+  // Process each paragraph
+  for (let i = 0; i < paragraphs.length; i++) {
+    const paragraph = paragraphs[i].trim();
+    if (!paragraph) continue;
+
+    // If adding this paragraph would exceed chunk size, process current chunk
+    if (currentChunk && (currentChunk.length + paragraph.length + 1 > effectiveChunkSize)) {
+      createChunk(currentChunk);
+      currentChunk = '';
+    }
+
+    // If paragraph itself exceeds chunk size, split it
+    if (paragraph.length > effectiveChunkSize) {
+      // First, flush current chunk if any
+      if (currentChunk) {
+        createChunk(currentChunk);
+        currentChunk = '';
+      }
+
+      // Split large paragraph
+      let remainingText = paragraph;
+      while (remainingText) {
+        const splitPoint = findSplitPoint(remainingText, effectiveChunkSize);
+        const chunk = remainingText.slice(0, splitPoint).trim();
+        if (chunk) {
+          createChunk(chunk);
+        }
+        remainingText = remainingText.slice(splitPoint).trim();
+        
+        // Safety check
+        if (splitPoint === 0) {
+          console.error('Split point calculation failed, forcing split to prevent infinite loop');
+          remainingText = '';
+        }
+      }
+    } else {
+      // Normal case: add to current chunk or start new one
+      if (currentChunk) {
+        currentChunk = `${currentChunk} ${paragraph}`;
+      } else {
+        currentChunk = paragraph;
+      }
+    }
+  }
+
+  // Process final chunk if any
+  if (currentChunk) {
+    createChunk(currentChunk, true);
+  }
+
+  // Update post_context for all chunks
+  for (let i = 0; i < chunks.length - 1; i++) {
+    chunks[i].post_context = chunks[i + 1].text.slice(0, effectiveOverlap);
+  }
+
+  // Validation and logging
+  const totalInputChars = cleanContent.length;
+  const totalOutputChars = chunks.reduce((sum, chunk) => sum + chunk.text.length, 0);
+  const coverage = (totalOutputChars / totalInputChars) * 100;
+
+  console.log(`Document processing statistics:
+  - Original content length: ${totalInputChars} characters
+  - Processed content length: ${totalOutputChars} characters
+  - Coverage: ${coverage.toFixed(2)}%
+  - Number of chunks: ${chunks.length}
+  - Average chunk size: ${Math.round(totalOutputChars / chunks.length)} characters
+  - Largest chunk: ${Math.max(...chunks.map(c => c.text.length))} characters
+  - Smallest chunk: ${Math.min(...chunks.map(c => c.text.length))} characters`);
+
+  if (coverage < 95) {
+    console.warn(`Warning: Content coverage is below 95% (${coverage.toFixed(2)}%). This might indicate content loss.`);
+  }
+
+  if (chunks.some(chunk => chunk.text.length > MAX_CHUNK_SIZE)) {
+    console.warn('Warning: Some chunks exceed maximum size limit');
+  }
+
   return chunks;
 }
 
