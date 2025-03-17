@@ -1,11 +1,11 @@
 {
   "functions": {
     "api/documents/process/*": {
-      "memory": 2048,
+      "memory": 1024,
       "maxDuration": 60
     },
     "api/**/*.ts": {
-      "memory": 2048,
+      "memory": 1024,
       "maxDuration": 30
     }
   },
