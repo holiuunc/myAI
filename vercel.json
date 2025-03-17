@@ -1,0 +1,14 @@
+{
+  "functions": {
+    "workers/*.ts": {
+      "includeFiles": "node_modules/**"
+    },
+    "workers/*.mjs": {
+      "includeFiles": "node_modules/**"
+    },
+    "api/**/*.ts": {
+      "includeFiles": "node_modules/**"
+    }
+  },
+  "installCommand": "npm install"
+} 

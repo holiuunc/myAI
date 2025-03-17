@@ -1,17 +1,12 @@
 import { parentPort } from 'worker_threads';
-import { OpenAI } from 'openai';
-import { Pinecone } from '@pinecone-database/pinecone';
+// Use dynamic imports for OpenAI and Pinecone
+let OpenAI;
+let Pinecone;
 import { createHash } from 'crypto';
 
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '',
-});
-
-// Initialize Pinecone
-const pineconeClient = new Pinecone({
-  apiKey: process.env.PINECONE_API_KEY || '',
-});
+// We'll initialize these in the setup function
+let openai;
+let pineconeClient;
 
 // Simple in-memory cache for embeddings
 const embeddingCache = new Map();
@@ -19,6 +14,33 @@ const embeddingCache = new Map();
 // Hash function for caching
 function hashText(text) {
   return createHash('md5').update(text).digest('hex');
+}
+
+// Dynamically import dependencies to avoid Vercel bundling issues
+async function setupDependencies() {
+  try {
+    // Import the packages dynamically
+    const openaiModule = await import('openai');
+    const pineconeModule = await import('@pinecone-database/pinecone');
+    
+    // Get the constructors
+    OpenAI = openaiModule.OpenAI;
+    Pinecone = pineconeModule.Pinecone;
+    
+    // Initialize the clients
+    openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY || '',
+    });
+    
+    pineconeClient = new Pinecone({
+      apiKey: process.env.PINECONE_API_KEY || '',
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('Error setting up dependencies:', error);
+    return false;
+  }
 }
 
 async function generateEmbeddingWithCache(text) {
@@ -41,6 +63,12 @@ async function generateEmbeddingWithCache(text) {
 
 async function processChunks(chunks, userId, indexName) {
   try {
+    // Make sure dependencies are set up
+    const dependenciesReady = await setupDependencies();
+    if (!dependenciesReady) {
+      throw new Error('Failed to initialize dependencies');
+    }
+    
     const pineconeIndex = pineconeClient.Index(indexName);
     const namespaceIndex = pineconeIndex.namespace(userId);
     
@@ -99,6 +127,7 @@ async function processChunks(chunks, userId, indexName) {
     
     return { success: true };
   } catch (error) {
+    console.error('Error processing chunks:', error);
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Unknown error' 

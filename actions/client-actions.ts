@@ -101,9 +101,16 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
     });
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      const errorText = errorData?.error || await response.text();
-      throw new Error(errorText || `Failed to upload document (${response.status})`);
+      // First clone the response before reading it to avoid the stream already read error
+      const errorText = await response.text().catch(() => `Failed to upload document (${response.status})`);
+      try {
+        // Try to parse as JSON if possible
+        const errorData = JSON.parse(errorText);
+        throw new Error(errorData.error || `Failed to upload document (${response.status})`);
+      } catch (e) {
+        // If parsing fails, just use the text
+        throw new Error(errorText || `Failed to upload document (${response.status})`);
+      }
     }
     
     const data = await response.json();
@@ -119,6 +126,7 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
       success: true,
       document: data.document
     };
+    
   } catch (error) {
     console.error('Error uploading document:', error);
     return {
