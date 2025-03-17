@@ -30,14 +30,9 @@ export default function Chat() {
 
   return (
     <>
-      {/* This will show before the panel as a debug measure */}
-      {user && <div style={{position: 'absolute', top: 0, right: 0, background: '#eee', padding: '5px', fontSize: '10px'}}>
-        Logged in as: {user.email}
-      </div>}
-
       <ChatHeader 
         clearMessages={clearMessages} 
-        user={user} 
+        user={user as any}
         onLoginClick={() => setLoginModalOpen(true)}
         onLogoutClick={logout}
       />

@@ -118,13 +118,20 @@ export default function useApp(externalUser?: User) {
     }
   };
 
-  const addUserMessage = (input: string) => {
+  const addUserMessage = (content: string): DisplayMessage => {
     const newUserMessage: DisplayMessage = {
       role: "user",
-      content: input,
+      content,
       citations: [],
     };
-    setMessages((prevMessages) => [...prevMessages, newUserMessage]);
+    setMessages((prevMessages) => {
+      const updatedMessages = [...prevMessages, newUserMessage];
+      // Save immediately after adding user message
+      if (user) {
+        saveMessages(updatedMessages);
+      }
+      return updatedMessages;
+    });
     return newUserMessage;
   };
 
@@ -134,7 +141,14 @@ export default function useApp(externalUser?: User) {
       content,
       citations,
     };
-    setMessages((prevMessages) => [...prevMessages, newAssistantMessage]);
+    setMessages((prevMessages) => {
+      const updatedMessages = [...prevMessages, newAssistantMessage];
+      // Save immediately after adding assistant message
+      if (user) {
+        saveMessages(updatedMessages);
+      }
+      return updatedMessages;
+    });
     return newAssistantMessage;
   };
 
@@ -334,28 +348,69 @@ export default function useApp(externalUser?: User) {
     }
   }, [user?.id]);
 
+  // Save messages to server with retry logic
+  const saveMessages = async (messagesToSave: DisplayMessage[]) => {
+    if (!user) return;
+    
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    const attemptSave = async (): Promise<boolean> => {
+      try {
+        const response = await fetch('/api/chats', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ messages: messagesToSave }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        // Also update localStorage as backup
+        const storageKey = `chatMessages-${user.id}`;
+        localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
+        
+        return true;
+      } catch (error) {
+        console.error(`Error saving messages (attempt ${retryCount + 1}):`, error);
+        return false;
+      }
+    };
+    
+    while (retryCount < maxRetries) {
+      const success = await attemptSave();
+      if (success) return;
+      
+      retryCount++;
+      if (retryCount < maxRetries) {
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+      }
+    }
+    
+    // If all retries failed, save to localStorage as fallback
+    const storageKey = `chatMessages-${user.id}`;
+    localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
+  };
+
+  // Remove the debounced save effect since we're saving immediately
   // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
   useEffect(() => {
-    if (!user || messages.length <= 1) return;
-    
-    // Use debounce with a longer delay (3-5 seconds)
-    const saveTimeout = setTimeout(() => {
-      saveMessages(messages);
-    }, 5000); // Increased from 1000ms to 5000ms
-    
-    return () => clearTimeout(saveTimeout);
-  }, [messages, user?.id]);
-
-  // Add this effect to save on unmount
-  // biome-ignore lint/correctness/useExhaustiveDependencies: <explanation>
-    useEffect(() => {
-    // Save when component unmounts (user navigates away or closes tab)
+    // Save when component unmounts
     return () => {
       if (user && messages.length > 1) {
+        // Use a synchronous localStorage save on unmount as backup
+        const storageKey = `chatMessages-${user.id}`;
+        localStorage.setItem(storageKey, JSON.stringify(messages));
+        
+        // Attempt server save, but don't wait for it
         saveMessages(messages);
       }
     };
-  }, []);
+  }, [messages, user]);
 
   const clearMessages = async () => {
     setMessages([initialAssistantMessage]);
@@ -401,26 +456,6 @@ export default function useApp(externalUser?: User) {
       if (storedMessages) {
         setMessages(JSON.parse(storedMessages));
       }
-    }
-  };
-
-  // Save messages to server
-  const saveMessages = async (messagesToSave: DisplayMessage[]) => {
-    if (!user) return;
-    
-    try {
-      await fetch('/api/chats', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ messages: messagesToSave }),
-      });
-    } catch (error) {
-      console.error("Error saving messages to server:", error);
-      // Fallback to localStorage if server request fails
-      const storageKey = `chatMessages-${user.id}`;
-      localStorage.setItem(storageKey, JSON.stringify(messagesToSave));
     }
   };
 

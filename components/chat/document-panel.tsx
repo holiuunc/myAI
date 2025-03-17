@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { FileIcon, Trash2, FileText } from "lucide-react";
+import { FileIcon, Trash2, FileText, RefreshCw } from "lucide-react";
 import type { UploadedDocument } from "@/types";
 import { FileUploader } from "./file-uploader";
 
@@ -12,9 +12,10 @@ interface DocumentPanelProps {
   documents: UploadedDocument[];
   onUpload: (file: File) => Promise<void>;
   onDelete: (id: string, force?: boolean) => Promise<void>; // Add optional force parameter
+  refreshDocuments: () => void;
 }
 
-export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelProps) {
+export function DocumentPanel({ documents, onUpload, onDelete, refreshDocuments }: DocumentPanelProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [failedDeleteId, setFailedDeleteId] = useState<string | null>(null);
   
@@ -54,9 +55,40 @@ export function DocumentPanel({ documents, onUpload, onDelete }: DocumentPanelPr
   return (
     <div className="h-full flex flex-col bg-gray-50 border-l">
       <div className="h-4" />
-      <div className="p-4 border-b bg-white">
-        <h2 className="text-lg font-semibold">Learning Materials</h2>
-        <p className="text-sm text-gray-500">Upload documents to enhance my teaching</p>
+      <div className="p-4 border-b">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <h2 className="text-lg font-semibold">Your Documents</h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={refreshDocuments}
+            className="self-start sm:ml-auto"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="mt-4">
+          {documents.map((doc) => (
+            <div
+              key={doc.id}
+              className="flex items-center gap-2 py-2 pr-2 w-full"
+            >
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-sm" title={doc.title}>
+                  {doc.title}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDelete(doc.id)}
+                className="flex-shrink-0"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="p-4">

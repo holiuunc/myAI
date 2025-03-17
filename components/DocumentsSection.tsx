@@ -142,13 +142,14 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
   
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         <h2 className="text-xl font-semibold">Your Documents</h2>
         <Button 
           variant="outline" 
           size="sm" 
           onClick={loadDocuments}
           disabled={isLoading}
+          className="self-start sm:ml-auto"
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
           Refresh
@@ -169,16 +170,18 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
         ) : (
           <ul className="divide-y">
             {documents.map((doc) => (
-              <li key={doc.id} className="py-3 flex justify-between items-center">
-                <div className="flex items-center flex-grow mr-4">
-                  <FileText className="h-5 w-5 text-gray-400 mr-3" />
-                  <div className="flex-grow">
-                    <p className="font-medium">{doc.title}</p>
+              <li key={doc.id} className="py-3 flex items-center">
+                <div className="flex items-center flex-grow min-w-0 mr-4">
+                  <FileText className="h-5 w-5 text-gray-400 mr-3 flex-shrink-0" />
+                  <div className="flex-grow min-w-0">
+                    <p className="font-medium truncate" title={doc.title}>
+                      {doc.title}
+                    </p>
                     <div className="flex items-center text-xs text-gray-500">
-                      <span>{new Date(doc.created_at).toLocaleString()}</span>
+                      <span className="truncate">{new Date(doc.created_at).toLocaleString()}</span>
                       
                       {doc.status && (
-                        <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${getStatusColor(doc.status)}`}>
+                        <span className={`ml-2 px-2 py-0.5 rounded-full text-xs flex-shrink-0 ${getStatusColor(doc.status)}`}>
                           {STATUS_LABELS[doc.status as keyof typeof STATUS_LABELS] || doc.status}
                         </span>
                       )}
@@ -206,6 +209,7 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
                   size="icon"
                   onClick={() => handleDeleteDocument(doc.id)}
                   title="Delete document"
+                  className="flex-shrink-0"
                 >
                   <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
                 </Button>
