@@ -491,45 +491,75 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
 async function storeChunksInPinecone(embeddedChunks: any[]): Promise<void> {
-  // Prepare vectors for upsert
-  const vectors = embeddedChunks.map(chunk => ({
-    id: `${chunk.source_url}-${chunk.order}`,
-    values: chunk.embedding,
-    metadata: {
-      text: chunk.text,
-      pre_context: chunk.pre_context,
-      post_context: chunk.post_context,
-      source_url: chunk.source_url,
-      source_description: chunk.source_description,
-      order: chunk.order,
-      user_id: chunk.user_id,
-    },
-  }));
+  console.log(`Storing ${embeddedChunks.length} chunks in Pinecone using API route`);
   
-  const userId = embeddedChunks[0].user_id;
-  const namespaceIndex = pineconeIndex.namespace(userId);
-  
-  // Optimize batch size for Pinecone (increased to 250)
-  const batchSize = 250;
-  const batches = [];
-  
-  for (let i = 0; i < vectors.length; i += batchSize) {
-    batches.push(vectors.slice(i, i + batchSize));
+  if (!embeddedChunks.length) {
+    console.warn('No chunks to store in Pinecone');
+    return;
   }
   
-  // Process Pinecone batches in parallel with rate limiting
-  await Promise.all(
-    batches.map(async (batch, index) => {
-      // Add a small delay between batches
-      if (index > 0) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      console.log(`Upserting batch ${index + 1}/${batches.length} to Pinecone`);
-      return namespaceIndex.upsert(batch);
-    })
-  );
+  // Get the user ID from the first chunk
+  const userId = embeddedChunks[0].user_id;
   
-  console.log('Successfully stored all chunks in Pinecone');
+  // Prepare chunks to send to the API
+  const chunksToProcess = embeddedChunks.map(chunk => ({
+    text: chunk.text,
+    pre_context: chunk.pre_context,
+    post_context: chunk.post_context,
+    source_url: chunk.source_url,
+    source_description: chunk.source_description,
+    order: chunk.order,
+    user_id: chunk.user_id,
+  }));
+  
+  // Process in batches of maximum 50 chunks at a time to avoid timeouts
+  const batchSize = 50;
+  const batches = [];
+  
+  for (let i = 0; i < chunksToProcess.length; i += batchSize) {
+    batches.push(chunksToProcess.slice(i, i + batchSize));
+  }
+  
+  console.log(`Processing chunks in ${batches.length} batches of max ${batchSize} chunks each`);
+  
+  let batchCounter = 0;
+  
+  // Send each batch to the API route
+  for (const batch of batches) {
+    batchCounter++;
+    console.log(`Processing batch ${batchCounter}/${batches.length} with ${batch.length} chunks`);
+    
+    try {
+      const response = await fetch('/api/documents/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chunks: batch,
+          indexName: 'myai', // Your Pinecone index name
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to process chunks: ${errorText}`);
+      }
+      
+      const result = await response.json();
+      console.log(`Batch ${batchCounter} processed successfully: ${result.chunksProcessed} chunks`);
+      
+      // Small delay between batches to avoid rate limiting
+      if (batchCounter < batches.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } catch (error) {
+      console.error(`Error processing batch ${batchCounter}:`, error);
+      throw error;
+    }
+  }
+  
+  console.log('Successfully stored all chunks in Pinecone via API route');
 }
 
 async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
