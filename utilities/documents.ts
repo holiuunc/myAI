@@ -818,33 +818,46 @@ async function deleteDocumentChunksFromPinecone(documentId: string, userId: stri
     // Get namespace-specific index
     const namespaceIndex = pineconeIndex.namespace(userId);
     
-    // We need to handle potential pagination since a document might have more than 1000 vectors
-    let totalDeleted = 0;
-    let hasMoreVectors = true;
+    // Create a dummy vector for querying (using OpenAI's embedding dimension)
+    const dummyVector = Array(1536).fill(0);
     
-    while (hasMoreVectors) {
-      // Query to get vector IDs for this document (up to 10000 at a time to handle large documents)
-      console.log(`Querying for vectors of document ${documentId}, batch ${totalDeleted}`);
-      const queryResponse = await namespaceIndex.query({
-        vector: [],
-        topK: 10000,
-        includeValues: false,
-        includeMetadata: true,
-      });
+    // Search for chunks with the document ID in metadata
+    console.log(`Searching for vectors with document ID: ${documentId}`);
+    const queryResponse = await namespaceIndex.query({
+      vector: dummyVector,
+      topK: 10000,
+      filter: { 
+        source_url: { $eq: documentId } 
+      },
+      includeMetadata: true
+    });
+    
+    // Extract IDs to delete
+    const vectorIds = queryResponse.matches.map(match => match.id);
+    
+    if (vectorIds.length > 0) {
+      console.log(`Found ${vectorIds.length} vectors to delete`);
       
-      const vectorIds = queryResponse.matches.map(match => match.id);
-      totalDeleted += vectorIds.length;
+      // Delete in batches of 1000 or fewer (Pinecone's limit)
+      const batchSize = 1000;
+      const batches = [];
       
-      if (vectorIds.length < 10000) {
-        hasMoreVectors = false;
+      for (let i = 0; i < vectorIds.length; i += batchSize) {
+        batches.push(vectorIds.slice(i, i + batchSize));
       }
       
-      if (vectorIds.length > 0) {
-        await namespaceIndex.deleteMany(vectorIds);
+      console.log(`Deleting vectors in ${batches.length} batches`);
+      
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        console.log(`Deleting batch ${i + 1}/${batches.length} with ${batch.length} vectors`);
+        await namespaceIndex.deleteMany(batch);
       }
+      
+      console.log(`Successfully deleted ${vectorIds.length} chunks for document ${documentId}`);
+    } else {
+      console.log(`No vectors found for document ${documentId}`);
     }
-    
-    console.log(`Deleted ${totalDeleted} chunks from Pinecone for document ${documentId}`);
   } catch (error) {
     console.error(`Error deleting chunks from Pinecone:`, error);
     throw error;

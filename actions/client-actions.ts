@@ -15,15 +15,24 @@ export async function getDocumentsClient(userId: string): Promise<{
   }
   
   try {
-    // Fetch documents from API
-    const response = await fetch(`/api/documents?userId=${userId}`);
+    // Fetch documents from API with better URL construction
+    console.log(`Fetching documents for user ${userId}`);
+    const response = await fetch(`/api/documents?userId=${encodeURIComponent(userId)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+      },
+    });
     
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(`Error response (${response.status}):`, errorText);
       throw new Error(errorText || `Failed to fetch documents (${response.status})`);
     }
     
     const data = await response.json();
+    console.log(`Successfully fetched ${data.documents?.length || 0} documents`);
     return {
       success: true,
       documents: data.documents || []
@@ -53,15 +62,27 @@ export async function deleteDocumentClient(documentId: string, userId: string): 
   }
   
   try {
-    const response = await fetch(`/api/documents/${documentId}?userId=${userId}`, {
-      method: 'DELETE'
+    console.log(`Deleting document ${documentId} for user ${userId}`);
+    const response = await fetch(`/api/documents/${documentId}?userId=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+      headers: {
+        'Cache-Control': 'no-cache'
+      }
     });
     
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(errorText || `Failed to delete document (${response.status})`);
+      console.error(`Error response (${response.status}):`, errorText);
+      try {
+        const errorJson = JSON.parse(errorText);
+        throw new Error(errorJson.error || `Failed to delete document (${response.status})`);
+      } catch (e) {
+        throw new Error(errorText || `Failed to delete document (${response.status})`);
+      }
     }
     
+    const data = await response.json();
+    console.log('Deletion successful:', data);
     return { success: true };
   } catch (error) {
     console.error('Error deleting document:', error);
@@ -97,12 +118,18 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
     console.log(`Uploading document ${file.name} for user ${userId}...`);
     const response = await fetch('/api/documents/upload', {
       method: 'POST',
-      body: formData
+      body: formData,
+      // Don't set Content-Type for FormData
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache',
+      },
     });
     
     if (!response.ok) {
       // First clone the response before reading it to avoid the stream already read error
       const errorText = await response.text().catch(() => `Failed to upload document (${response.status})`);
+      console.error(`Error response (${response.status}):`, errorText);
       try {
         // Try to parse as JSON if possible
         const errorData = JSON.parse(errorText);

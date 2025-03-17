@@ -1,37 +1,55 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { processDocument } from '@/utilities/documents';
-import { getAuthenticatedUser } from '@/middleware/auth';
 
-export async function POST(request: Request) {
-  // Get authenticated user
-  const user = await getAuthenticatedUser();
+export async function POST(request: NextRequest) {
+  console.log('API route: POST /api/documents/upload called');
   
-  if (!user) {
-    return NextResponse.json(
-      { error: 'Authentication required' },
-      { status: 401 }
-    );
-  }
-  
-  // Process form data and upload document
   try {
+    // Check if the request is a form data request
+    if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
+      console.error('Invalid content type for upload', request.headers.get('content-type'));
+      return NextResponse.json(
+        { error: 'Invalid request format. Must be multipart/form-data' },
+        { status: 400 }
+      );
+    }
+    
+    // Get the form data
     const formData = await request.formData();
     const file = formData.get('file') as File;
+    const userId = formData.get('userId') as string;
     
+    console.log(`Processing upload for user ${userId || 'unknown'}, file: ${file?.name || 'none'}`);
+    
+    // Validate request data
     if (!file) {
+      console.error('No file provided in upload request');
       return NextResponse.json(
         { error: 'No file provided' },
         { status: 400 }
       );
     }
     
-    const document = await processDocument(file, user.id);
+    if (!userId) {
+      console.error('No userId provided in upload request');
+      return NextResponse.json(
+        { error: 'User ID is required' },
+        { status: 400 }
+      );
+    }
     
-    return NextResponse.json({ document });
+    // Process the document
+    console.log(`Calling processDocument for file: ${file.name}, size: ${Math.round(file.size/1024)}KB`);
+    const document = await processDocument(file, userId);
+    
+    console.log(`Document processed successfully, ID: ${document.id}`);
+    return NextResponse.json({ success: true, document });
   } catch (error) {
-    console.error('Error uploading document:', error);
+    console.error('Error processing upload:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Upload failed' },
+      { error: `Failed to process document: ${errorMessage}` },
       { status: 500 }
     );
   }
