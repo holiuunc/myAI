@@ -707,12 +707,14 @@ async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string)
   
   // Get the base URL for the API
   // In server-side code, we need to use the full URL, not a relative one
-  // We'll use the NEXTAUTH_URL environment variable which should contain the site's base URL
-  // This is typically something like https://your-app.vercel.app in production
-  // or http://localhost:3000 in development
-  const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL 
-    ? `https://${process.env.VERCEL_URL}`
-    : 'http://localhost:3000';
+  let baseUrl = 'http://localhost:3000';
+  
+  // In production environments
+  if (process.env.VERCEL_URL) {
+    baseUrl = `https://${process.env.VERCEL_URL}`;
+  } else if (process.env.NEXTAUTH_URL) {
+    baseUrl = process.env.NEXTAUTH_URL;
+  }
     
   const apiUrl = `${baseUrl}/api/documents/process`;
   
@@ -824,136 +826,27 @@ async function deleteDocumentChunksFromPinecone(documentId: string, userId: stri
       // Query to get vector IDs for this document (up to 10000 at a time to handle large documents)
       console.log(`Querying for vectors of document ${documentId}, batch ${totalDeleted}`);
       const queryResponse = await namespaceIndex.query({
-        vector: Array(1536).fill(0), // Dummy vector for query
-        topK: 10000, // Get up to 10000 vectors at once
-        filter: { source_url: documentId },
-        includeMetadata: false
+        vector: [],
+        topK: 10000,
+        includeValues: false,
+        includeMetadata: true,
       });
       
-      // Extract the vector IDs
       const vectorIds = queryResponse.matches.map(match => match.id);
-      
-      if (vectorIds.length === 0) {
-        console.log(`No more vectors found for document ${documentId}`);
-        hasMoreVectors = false;
-        break;
-      }
-      
-      console.log(`Found ${vectorIds.length} vectors to delete for document ${documentId}`);
-      
-      // Delete vectors in batches of 1000 to avoid timeouts
-      const batchSize = 1000;
-      for (let i = 0; i < vectorIds.length; i += batchSize) {
-        const batch = vectorIds.slice(i, i + batchSize);
-        await namespaceIndex.deleteMany(batch);
-        console.log(`Deleted batch of ${batch.length} vectors (${i + batch.length}/${vectorIds.length})`);
-      }
-      
       totalDeleted += vectorIds.length;
       
-      // If we got less than our query limit, we're done
       if (vectorIds.length < 10000) {
         hasMoreVectors = false;
-      } else {
-        // Add a small delay to prevent rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      if (vectorIds.length > 0) {
+        await namespaceIndex.deleteMany(vectorIds);
       }
     }
     
-    // Perform a final verification query to make sure all vectors are deleted
-    const verificationResponse = await namespaceIndex.query({
-      vector: Array(1536).fill(0),
-      topK: 100,
-      filter: { source_url: documentId },
-      includeMetadata: false
-    });
-    
-    if (verificationResponse.matches.length > 0) {
-      console.warn(`Found ${verificationResponse.matches.length} remaining vectors after deletion attempt. Trying one more time.`);
-      
-      // One more attempt with direct filter deletion
-      const remainingIds = verificationResponse.matches.map(match => match.id);
-      await namespaceIndex.deleteMany(remainingIds);
-      
-      console.log(`Completed second deletion attempt for remaining ${remainingIds.length} vectors`);
-    }
-    
-    console.log(`Successfully deleted a total of ${totalDeleted} vectors for document ${documentId}`);
+    console.log(`Deleted ${totalDeleted} chunks from Pinecone for document ${documentId}`);
   } catch (error) {
-    console.error(`Error deleting vectors for document ${documentId}:`, error);
+    console.error(`Error deleting chunks from Pinecone:`, error);
     throw error;
-  }
-}
-
-// Add this function for single embeddings
-async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await openai.embeddings.create({
-    model: 'text-embedding-ada-002',
-    input: text,
-  });
-  
-  return response.data[0].embedding;
-}
-
-// Then update the getRelatedDocuments function
-export async function getRelatedDocuments(question: string, userId: string) {
-  const embedding = await generateEmbedding(question);
-  
-  // Use the namespace-specific index
-  const namespaceIndex = pineconeIndex.namespace(userId);
-  
-  // Query using namespace-specific index (no need for namespace parameter)
-  const results = await namespaceIndex.query({
-    vector: embedding,
-    topK: QUESTION_RESPONSE_TOP_K,
-    includeMetadata: true
-  });
-  
-  return results.matches;
-}
-
-// Process a document by ID
-export async function processDocumentById(documentId: string): Promise<{success: boolean; message: string}> {
-  console.log(`Processing document by ID: ${documentId}`);
-  
-  try {
-    // Get document from database
-    const { data: document, error } = await supabaseAdmin
-      .from('documents')
-      .select('*')
-      .eq('id', documentId)
-      .single();
-    
-    if (error) {
-      console.error(`Error fetching document ${documentId}:`, error);
-      return { success: false, message: `Document not found: ${error.message}` };
-    }
-    
-    if (!document) {
-      return { success: false, message: 'Document not found' };
-    }
-    
-    // Skip if not in pending status
-    if (document.status !== 'pending') {
-      return { 
-        success: false, 
-        message: `Document is not pending (current status: ${document.status})` 
-      };
-    }
-    
-    // Process the document asynchronously
-    // Use void to indicate we're not waiting for the result
-    void processDocumentAsync(document);
-    
-    return { 
-      success: true, 
-      message: `Started processing document ${documentId}` 
-    };
-  } catch (error) {
-    console.error(`Error in processDocumentById for ${documentId}:`, error);
-    return { 
-      success: false, 
-      message: error instanceof Error ? error.message : 'Unknown error' 
-    };
   }
 }
