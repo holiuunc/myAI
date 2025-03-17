@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
 import PDFParser from 'pdf2json';
 import { resolvePDFJS } from 'pdfjs-serverless';
+import { createHash } from 'crypto';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -22,6 +23,33 @@ const openai = new OpenAI({
 // Queue to track documents being processed
 // In a production app, replace with a more robust solution like Redis or a database table
 const processingQueue = new Map<string, boolean>();
+
+// Simple in-memory cache for embeddings
+const embeddingCache = new Map();
+
+// Hash function for caching
+function hashText(text: string): string {
+  return createHash('md5').update(text).digest('hex');
+}
+
+// OpenAI embedding generation with caching
+async function generateEmbeddingWithCache(text: string) {
+  const hash = hashText(text);
+  
+  if (embeddingCache.has(hash)) {
+    return embeddingCache.get(hash);
+  }
+  
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-ada-002',
+    input: text,
+  });
+  
+  const embedding = response.data[0].embedding;
+  embeddingCache.set(hash, embedding);
+  
+  return embedding;
+}
 
 // Update the getDocuments function to be user-specific
 export async function getDocuments(userId?: string): Promise<UploadedDocument[]> {
