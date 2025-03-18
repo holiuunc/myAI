@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/configuration/supabase';
-import { processUploadedDocument } from '@/utilities/documents';
+import { v4 as uuidv4 } from 'uuid';
 
 export async function POST(request: Request) {
   try {
@@ -20,33 +20,61 @@ export async function POST(request: Request) {
       );
     }
     
-    console.log(`Processing uploaded file from storage: ${filePath}`);
+    console.log(`Initiating background processing for file: ${filePath}`);
     
-    // Download the file from Supabase storage
-    const { data: fileData, error: downloadError } = await supabaseAdmin.storage
+    // Extract filename from the path
+    const pathParts = filePath.split('/');
+    const fileName = pathParts[pathParts.length-1];
+    
+    // Create document record immediately with pending status
+    const documentId = uuidv4();
+    const { error: insertError } = await supabaseAdmin
       .from('documents')
-      .download(filePath);
+      .insert([{
+        id: documentId,
+        title: fileName,
+        user_id: userId,
+        created_at: new Date().toISOString(),
+        status: 'pending',
+        progress: 0,
+        vector_count: 0,
+        processing_stage: 'queued'
+      }]);
       
-    if (downloadError || !fileData) {
-      console.error('Error downloading file from storage:', downloadError);
+    if (insertError) {
+      console.error('Error creating document record:', insertError);
       return NextResponse.json(
-        { error: `Failed to download file: ${downloadError?.message}` },
+        { error: `Failed to create document record: ${insertError.message}` },
         { status: 500 }
       );
     }
     
-    // Process the document
-    const document = await processUploadedDocument(fileData, filePath, userId);
+    // Trigger background processing using Edge Runtime
+    // We don't await this - it will run in the background
+    fetch(new URL('/api/documents/background-process', request.url).toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        documentId,
+        filePath,
+        userId
+      }),
+    }).catch(error => {
+      console.error('Error triggering background processing:', error);
+      // Non-critical error - the document is already created
+    });
     
-    // Return success response
+    // Return success response immediately
     return NextResponse.json({
       success: true,
       document: {
-        id: document.id,
-        title: document.title,
-        status: document.status,
-        progress: document.progress,
-        created_at: document.created_at
+        id: documentId,
+        title: fileName,
+        status: 'pending',
+        progress: 0,
+        created_at: new Date().toISOString()
       }
     });
   } catch (error) {

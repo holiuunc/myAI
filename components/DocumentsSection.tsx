@@ -14,6 +14,7 @@ interface DocumentsSectionProps {
 const STATUS_LABELS = {
   pending: 'Queued',
   processing: 'Processing',
+  processing_paused: 'Paused',
   complete: 'Complete',
   error: 'Error'
 };
@@ -22,6 +23,7 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
   const [documents, setDocuments] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resumingDocIds, setResumingDocIds] = useState<Set<string>>(new Set());
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
   
   const loadDocuments = async () => {
@@ -96,11 +98,66 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
     }
   };
   
+  // Add a function to resume document processing
+  const resumeDocumentProcessing = async (documentId: string) => {
+    try {
+      if (resumingDocIds.has(documentId)) return; // Prevent duplicate requests
+      
+      setResumingDocIds(prev => new Set(prev).add(documentId));
+      
+      const response = await fetch('/api/documents/status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ documentId }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to resume processing');
+      }
+      
+      // Update document status locally to show processing
+      setDocuments(prevDocs => 
+        prevDocs.map(doc => 
+          doc.id === documentId 
+            ? { ...doc, status: 'processing' } 
+            : doc
+        )
+      );
+      
+      // Refresh the document list
+      setTimeout(loadDocuments, 1000);
+    } catch (err) {
+      console.error('Error resuming document:', err);
+      setError(err instanceof Error ? err.message : 'Failed to resume processing');
+    } finally {
+      setResumingDocIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(documentId);
+        return newSet;
+      });
+    }
+  };
+  
+  // Check for paused documents and resume them automatically
+  useEffect(() => {
+    // Find any documents in processing_paused state
+    const pausedDocs = documents.filter(doc => doc.status === 'processing_paused');
+    
+    // Auto-resume the first paused document if any exist
+    if (pausedDocs.length > 0 && !resumingDocIds.has(pausedDocs[0].id)) {
+      console.log(`Auto-resuming paused document: ${pausedDocs[0].title}`);
+      resumeDocumentProcessing(pausedDocs[0].id);
+    }
+  }, [documents, resumingDocIds]);
+  
   // Setup polling to refresh documents with pending status
   useEffect(() => {
     // Check if we need to poll (any documents with pending/processing status)
     const needPolling = documents.some(doc => 
-      doc.status === 'pending' || doc.status === 'processing');
+      doc.status === 'pending' || doc.status === 'processing' || doc.status === 'processing_paused');
     
     // Clear existing interval if it exists
     if (pollingInterval.current) {
@@ -143,6 +200,8 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
         return 'text-blue-500 bg-blue-50 border-blue-200';
       case 'processing':
         return 'text-yellow-500 bg-yellow-50 border-yellow-200';
+      case 'processing_paused':
+        return 'text-orange-500 bg-orange-50 border-orange-200';
       case 'complete':
         return 'text-green-500 bg-green-50 border-green-200';
       case 'error':
@@ -199,11 +258,26 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
                       )}
                     </div>
                     
-                    {(doc.status === 'pending' || doc.status === 'processing') && typeof doc.progress === 'number' && (
+                    {(doc.status === 'pending' || doc.status === 'processing' || doc.status === 'processing_paused') && 
+                     typeof doc.progress === 'number' && (
                       <div className="mt-2">
                         <Progress value={doc.progress} className="h-1 w-full" />
                         <p className="mt-1 text-xs text-gray-500">
                           {doc.progress}% complete
+                          {doc.status === 'processing_paused' && !resumingDocIds.has(doc.id) && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                resumeDocumentProcessing(doc.id);
+                              }}
+                              className="ml-2 text-blue-500 hover:text-blue-700 underline"
+                            >
+                              Resume
+                            </button>
+                          )}
+                          {resumingDocIds.has(doc.id) && (
+                            <span className="ml-2 text-blue-500">Resuming...</span>
+                          )}
                         </p>
                       </div>
                     )}
