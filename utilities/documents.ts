@@ -321,6 +321,29 @@ async function processDocumentInStages(document: UploadedDocument): Promise<void
         chunks_data: null // Clear chunks data to save space
       });
       console.log(`Document ${documentId} processing completed successfully`);
+      
+      // Check if this was a replacement document and delete the original
+      const { data: docInfo } = await supabaseAdmin
+        .from('documents')
+        .select('replace_doc_id, is_replacement')
+        .eq('id', documentId)
+        .single();
+        
+      if (docInfo?.is_replacement && docInfo?.replace_doc_id) {
+        console.log(`Document ${documentId} is a replacement, removing original document ${docInfo.replace_doc_id}`);
+        try {
+          // Delete the original document that this one is replacing
+          await supabaseAdmin
+            .from('documents')
+            .delete()
+            .eq('id', docInfo.replace_doc_id);
+            
+          console.log(`Successfully deleted replaced document ${docInfo.replace_doc_id}`);
+        } catch (err) {
+          console.error(`Error deleting replaced document: ${err}`);
+          // Non-critical error, we continue
+        }
+      }
     }
     
   } catch (error) {
@@ -1431,6 +1454,29 @@ async function continueDocumentBatchProcessing(document: UploadedDocument, start
         chunks_data: null // Clear chunks data to save space
       });
       console.log(`Document ${documentId} processing completed successfully`);
+      
+      // Check if this was a replacement document and delete the original
+      const { data: docInfo } = await supabaseAdmin
+        .from('documents')
+        .select('replace_doc_id, is_replacement')
+        .eq('id', documentId)
+        .single();
+        
+      if (docInfo?.is_replacement && docInfo?.replace_doc_id) {
+        console.log(`Document ${documentId} is a replacement, removing original document ${docInfo.replace_doc_id}`);
+        try {
+          // Delete the original document that this one is replacing
+          await supabaseAdmin
+            .from('documents')
+            .delete()
+            .eq('id', docInfo.replace_doc_id);
+            
+          console.log(`Successfully deleted replaced document ${docInfo.replace_doc_id}`);
+        } catch (err) {
+          console.error(`Error deleting replaced document: ${err}`);
+          // Non-critical error, we continue
+        }
+      }
     }
   } catch (error) {
     console.error(`Error in continueDocumentBatchProcessing: ${error}`);

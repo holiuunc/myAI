@@ -26,6 +26,21 @@ export async function POST(request: Request) {
     const pathParts = filePath.split('/');
     const fileName = pathParts[pathParts.length-1];
     
+    // Check if there's already a similar document
+    // This check helps avoid duplicates with the same name
+    const { data: existingDocs } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, status')
+      .eq('user_id', userId)
+      .eq('title', fileName)
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    // If there's an existing document with the same name being processed, 
+    // we'll mark this as a replacement document
+    const isReplacement = existingDocs && existingDocs.length > 0 && 
+      ['processing', 'processing_paused', 'pending'].includes(existingDocs[0].status);
+    
     // Create document record immediately with pending status
     const documentId = uuidv4();
     const { error: insertError } = await supabaseAdmin
@@ -38,7 +53,10 @@ export async function POST(request: Request) {
         status: 'pending',
         progress: 0,
         vector_count: 0,
-        processing_stage: 'queued'
+        processing_stage: 'queued',
+        file_path: filePath,
+        is_replacement: isReplacement, // Track if this is replacing another document
+        replace_doc_id: isReplacement ? existingDocs[0].id : null
       }]);
       
     if (insertError) {
@@ -49,38 +67,64 @@ export async function POST(request: Request) {
       );
     }
     
-    // Trigger background processing using Edge Runtime
-    // We don't await this - it will run in the background
-    fetch(new URL('/api/documents/background-process', request.url).toString(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        documentId,
-        filePath,
-        userId
-      }),
-    }).catch(error => {
-      console.error('Error triggering background processing:', error);
-      // Non-critical error - the document is already created
-    });
+    // For Vercel's environment, we need to handle timing differently
+    // Instead of starting immediately, use a setTimeout to give this function time to return
+    const isVercel = !!process.env.VERCEL;
     
-    // Return success response immediately
+    if (isVercel) {
+      // In Vercel, trigger the background process using a fetch to ensure this function returns quickly
+      console.log('Vercel environment detected, using fetch for background processing');
+      
+      // Get base URL for internal API calls
+      const baseUrl = process.env.VERCEL_URL 
+        ? `https://${process.env.VERCEL_URL}` 
+        : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000');
+      
+      // Fire the background processing request without waiting
+      fetch(`${baseUrl}/api/documents/background-process`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId,
+          filePath,
+          userId
+        }),
+      }).catch(error => {
+        console.error('Error triggering background processing:', error);
+      });
+    } else {
+      // For local dev, use the normal approach
+      // Trigger background processing without awaiting
+      fetch(new URL('/api/documents/background-process', request.url).toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId,
+          filePath,
+          userId
+        }),
+      }).catch(error => {
+        console.error('Error triggering background processing:', error);
+      });
+    }
+    
     return NextResponse.json({
       success: true,
       document: {
         id: documentId,
         title: fileName,
-        status: 'pending',
-        progress: 0,
-        created_at: new Date().toISOString()
-      }
+        status: 'pending'
+      },
+      message: 'Document processing initiated successfully'
     });
   } catch (error) {
-    console.error('Error processing uploaded document:', error);
+    console.error('Error handling document upload:', error);
     return NextResponse.json(
-      { error: `Failed to process document: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      { error: `Processing error: ${error instanceof Error ? error.message : 'Unknown error'}` },
       { status: 500 }
     );
   }
