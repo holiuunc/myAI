@@ -92,7 +92,7 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
     throw new Error("User must be logged in to upload documents");
   }
   
-  // console.log(`Uploading document: ${file.name} for user: ${userId}`);
+  console.log(`Uploading document: ${file.name} for user: ${userId}`);
   
   // Validate file size
   const maxFileSizeBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -141,13 +141,14 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
       file_type: file.type,
       status: 'pending',
       progress: 0,
-      vector_count: 0
+      vector_count: 0,
+      processing_stage: 'initial' // Track processing stage
     }]);
   
   // Trigger async processing of the document
   // Don't await this - we want to return quickly
   Promise.resolve().then(() => {
-    processDocumentAsync(document)
+    processDocumentInStages(document)
       .catch((error: Error | unknown) => {
         console.error(`Async processing error for document ${documentId}:`, error);
         // Update document status to error
@@ -167,9 +168,9 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
   return document;
 }
 
-// Process a document asynchronously
-async function processDocumentAsync(document: UploadedDocument): Promise<void> {
-  const { id: documentId, user_id: userId } = document;
+// Process a document in stages to avoid timeout
+async function processDocumentInStages(document: UploadedDocument): Promise<void> {
+  const { id: documentId, user_id: userId, content, title } = document;
   
   // Skip if already being processed
   if (processingQueue.get(documentId)) {
@@ -181,116 +182,115 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
   processingQueue.set(documentId, true);
   
   try {
-    // Update document status to processing
-    console.log(`Setting initial status for document ${documentId}`);
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        status: 'processing',
-        progress: 5,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
+    // STAGE 1: TEXT EXTRACTION (already done in uploadDocument)
+    console.log(`Starting Stage 1: Extraction done for document ${documentId}`);
+    await updateDocumentStatus(documentId, 'processing', 5, 'extraction');
     
-    console.log(`Processing document ${documentId} for RAG`);
+    // STAGE 2: CHUNKING
+    console.log(`Starting Stage 2: Chunking for document ${documentId}`);
+    await updateDocumentStatus(documentId, 'processing', 15, 'chunking');
     
-    // 1. Split document into chunks with optimized size - update to 15%
-    console.log(`Updating progress to 15% - chunking stage`);
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        status: 'processing',
-        progress: 15,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
-    
-    const result = splitIntoChunks(
-      document.content, 
-      document.id, 
-      document.title,
-      document.user_id,
-      2000,  // Increased chunk size for fewer API calls
-      200    // Reduced overlap while maintaining context
-    );
-    
+    const result = splitIntoChunks(content, documentId, title, userId);
     const { chunks, metrics } = result;
     
-    // Store metrics in Supabase for user visibility - update to 25%
-    console.log(`Updating progress to 25% - embedding preparation stage`);
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        status: 'processing',
-        progress: 25,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
-    
-    // 2. Process chunks using the storeChunksInPinecone function instead of worker threads
-    try {
-      // Create a proper structure for chunks before embedding
-      const preparedChunks = chunks.map(chunk => ({
-        text: chunk.text,
-        pre_context: chunk.pre_context,
-        post_context: chunk.post_context,
-        source_url: chunk.source_url,
-        source_description: chunk.source_description,
-        order: chunk.order,
-        user_id: chunk.user_id,
-      }));
-      
-      // Process more chunks in parallel by using a higher batch size for better performance
-      await storeChunksInPinecone(preparedChunks, documentId);
-      
-      // Update document status to complete - 100%
-      console.log(`Setting final status for document ${documentId} to complete (100%)`);
-      await supabaseAdmin
-        .from('documents')
-        .update({
-          status: 'complete',
-          progress: 100,
-          vector_count: chunks.length,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', documentId);
-      
-      // Verify the update was successful by explicitly checking
-      const { data: verifyDoc, error: verifyError } = await supabaseAdmin
-        .from('documents')
-        .select('progress, status')
-        .eq('id', documentId)
-        .single();
-        
-      if (verifyError) {
-        console.error(`Failed to verify final update: ${verifyError.message}`);
-      } else {
-        console.log(`Verified final document state: Progress=${verifyDoc.progress}%, Status=${verifyDoc.status}`);
-      }
-      
-      console.log(`Completed processing for document ${documentId}`);
-    } catch (error) {
-      console.error(`Error processing document ${documentId}:`, error);
-      
-      // Update document status to error
-      console.log(`Setting error status for document ${documentId}`);
-      await supabaseAdmin
-        .from('documents')
-        .update({
-          status: 'error',
-          progress: 0,
-          error_message: error instanceof Error ? error.message : String(error),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', documentId);
-      
-      throw error;
+    if (chunks.length === 0) {
+      throw new Error("No chunks were generated from the document");
     }
+    
+    // Prepare batches - each batch will have no more than 20 chunks
+    // to ensure processing fits within serverless function limits
+    const BATCH_SIZE = 20;
+    const batchCount = Math.ceil(chunks.length / BATCH_SIZE);
+    const batches = [];
+    
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+      batches.push(chunks.slice(i, i + BATCH_SIZE));
+    }
+    
+    // Store batches in the document for processing
+    console.log(`Document split into ${batchCount} batches of chunks`);
+    await supabaseAdmin.from('documents').update({
+      processing_stage: 'embedding_prep',
+      progress: 25,
+      status: 'processing',
+      batch_count: batchCount,
+      current_batch: 0,
+      // Store batch info and metrics, but not the full chunks
+      // to avoid hitting Supabase JSON size limits
+      chunks_data: { batchSizes: batches.map(b => b.length), totalChunks: chunks.length, metrics }
+    }).eq('id', documentId);
+    
+    // STAGE 3: PROCESS BATCHES - one batch at a time
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      
+      // Update progress - distribute 25% to 95% across batches
+      const progressStart = 25;
+      const progressEnd = 95;
+      const progressIncrement = (progressEnd - progressStart) / batches.length;
+      const currentProgress = Math.round(progressStart + (batchIndex * progressIncrement));
+      
+      // Update status before processing batch
+      await updateDocumentStatus(
+        documentId, 
+        'processing', 
+        currentProgress, 
+        'embedding', 
+        { current_batch: batchIndex, batch_count: batchCount }
+      );
+      
+      // Process this batch - in smaller groups to avoid timeouts
+      await processChunkBatch(batch, userId, documentId);
+      
+      // Update progress after batch completion
+      const newProgress = Math.round(progressStart + ((batchIndex + 1) * progressIncrement));
+      await updateDocumentStatus(
+        documentId, 
+        'processing', 
+        newProgress, 
+        'embedding', 
+        { current_batch: batchIndex + 1, batch_count: batchCount }
+      );
+      
+      // If processing is taking too long, exit early and let status endpoint continue
+      if (shouldExitProcessing()) {
+        console.log(`Exiting early after batch ${batchIndex+1}/${batchCount} to avoid timeout`);
+        await updateDocumentStatus(
+          documentId, 
+          'processing_paused', 
+          newProgress, 
+          'embedding', 
+          { 
+            current_batch: batchIndex + 1, 
+            batch_count: batchCount,
+            resumable: true
+          }
+        );
+        break;
+      }
+    }
+    
+    // Check if all batches were processed
+    const { data: docStatus } = await supabaseAdmin
+      .from('documents')
+      .select('current_batch, batch_count, status')
+      .eq('id', documentId)
+      .single();
+    
+    // If all batches completed, mark document as complete
+    if (docStatus && docStatus.current_batch === docStatus.batch_count) {
+      // All batches completed
+      await updateDocumentStatus(documentId, 'complete', 100, 'complete', {
+        vector_count: chunks.length,
+        chunks_data: null // Clear chunks data to save space
+      });
+      console.log(`Document ${documentId} processing completed successfully`);
+    }
+    
   } catch (error) {
-    console.error(`Error processing document ${documentId}:`, error);
+    console.error(`Error in processDocumentInStages: ${error}`);
     
     // Update document status to error
-    console.log(`Setting error status for document ${documentId} (outer catch)`);
     await supabaseAdmin
       .from('documents')
       .update({
@@ -308,63 +308,162 @@ async function processDocumentAsync(document: UploadedDocument): Promise<void> {
   }
 }
 
-// Helper to update document progress with additional metadata for UI
-async function updateDocumentProgress(documentId: string, progress: number, status?: string, additionalData?: any): Promise<void> {
-  // Create the base update data with the required progress field
-  const updateData: any = { 
+// Process a single batch of chunks
+async function processChunkBatch(chunks: any[], userId: string, documentId: string): Promise<void> {
+  if (!chunks.length) return;
+  
+  // Get namespace-specific index
+  const namespaceIndex = pineconeIndex.namespace(userId);
+  
+  // Process in smaller sub-batches to avoid timeouts
+  const SUB_BATCH_SIZE = 5;
+  
+  for (let i = 0; i < chunks.length; i += SUB_BATCH_SIZE) {
+    const subBatch = chunks.slice(i, i + SUB_BATCH_SIZE);
+    
+    try {
+      // Generate embeddings for this sub-batch
+      const embeddingsPromises = subBatch.map(chunk => generateEmbeddingWithCache(chunk.text));
+      const embeddings = await Promise.all(embeddingsPromises);
+      
+      // Prepare vectors for Pinecone
+      const vectors = subBatch.map((chunk, idx) => ({
+        id: `${chunk.source_url}-${chunk.order}`,
+        values: embeddings[idx],
+        metadata: {
+          text: chunk.text,
+          pre_context: chunk.pre_context || '',
+          post_context: chunk.post_context || '',
+          source_url: chunk.source_url,
+          source_description: chunk.source_description || '',
+          order: chunk.order || 0,
+          user_id: chunk.user_id,
+        },
+      }));
+      
+      // Upsert to Pinecone
+      await namespaceIndex.upsert(vectors);
+      
+      console.log(`Processed and stored ${vectors.length} chunks`);
+    } catch (error) {
+      console.error(`Error processing sub-batch: ${error}`);
+      throw error;
+    }
+  }
+}
+
+// Helper to check if we're approaching the serverless function timeout
+// Assuming the function started at process start time (conservative estimate)
+function shouldExitProcessing(): boolean {
+  // Most serverless platforms have timeouts between 10-60 seconds
+  // We'll exit if we've been running for more than 8 seconds to be safe
+  const MAX_EXECUTION_MS = 8000;
+  const executionTime = Date.now() - process.uptime() * 1000;
+  return executionTime > MAX_EXECUTION_MS;
+}
+
+// Helper to update document status
+async function updateDocumentStatus(
+  documentId: string, 
+  status: string, 
+  progress: number, 
+  stage?: string, 
+  additionalData: Record<string, any> = {}
+): Promise<void> {
+  const updateData: Record<string, any> = {
+    status,
     progress,
     updated_at: new Date().toISOString()
   };
   
-  // Always include status when provided
-  if (status) {
-    updateData.status = status;
+  if (stage) {
+    updateData.processing_stage = stage;
   }
   
-  // Log clear information about what's being updated
-  console.log(`Updating document ${documentId}: Progress=${progress}%, Status=${status || 'unchanged'}`);
+  // Add any additional fields
+  Object.assign(updateData, additionalData);
+  
+  console.log(`Updating document ${documentId}: Status=${status}, Progress=${progress}%, Stage=${stage || 'unchanged'}`);
   
   try {
-    // Execute the base update first to ensure progress and status are updated
     const { error } = await supabaseAdmin
       .from('documents')
       .update(updateData)
       .eq('id', documentId);
       
     if (error) {
-      throw error;
-    }
-    
-    // Verify the update was successful
-    const { data: updatedDoc, error: verifyError } = await supabaseAdmin
-      .from('documents')
-      .select('id, progress, status')
-      .eq('id', documentId)
-      .single();
-      
-    if (verifyError) {
-      console.error(`Failed to verify document update: ${verifyError.message}`);
-    } else {
-      console.log(`Document updated successfully: Progress=${updatedDoc.progress}%, Status=${updatedDoc.status}`);
+      console.error(`Error updating document status: ${error.message}`);
     }
   } catch (error) {
-    console.error(`Failed to update progress for document ${documentId}:`, error);
-    
-    // Attempt a fallback update with only the essential fields
-    try {
-      console.log(`Attempting fallback update for document ${documentId} with minimal fields`);
-      await supabaseAdmin
-        .from('documents')
-        .update({ 
-          progress, 
-          status: status || 'processing',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', documentId);
-    } catch (fallbackError) {
-      console.error(`Even fallback update failed: ${fallbackError}`);
-    }
+    console.error(`Failed to update document status: ${error}`);
   }
+}
+
+// API endpoint to resume document processing
+export async function resumeDocumentProcessing(documentId: string, userId: string): Promise<void> {
+  // Get document status
+  const { data: document } = await supabaseAdmin
+    .from('documents')
+    .select('*')
+    .eq('id', documentId)
+    .eq('user_id', userId)
+    .single();
+  
+  if (!document) {
+    throw new Error('Document not found');
+  }
+  
+  // Can only resume paused or error documents
+  if (['processing_paused', 'error'].includes(document.status)) {
+    // Get the current document content and remaining batches
+    await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'processing',
+        error_message: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', documentId);
+    
+    // Recreate the document object with the content
+    const resumeDoc: UploadedDocument = {
+      id: document.id,
+      title: document.title,
+      content: document.content,
+      user_id: document.user_id,
+      created_at: document.created_at,
+      status: 'processing',
+      progress: document.progress
+    };
+    
+    // Process document from the current batch
+    await processDocumentInStages(resumeDoc);
+  }
+}
+
+// Get document processing status for API
+export async function getDocumentProcessingStatus(documentId: string, userId: string): Promise<any> {
+  const { data, error } = await supabaseAdmin
+    .from('documents')
+    .select('*')
+    .eq('id', documentId)
+    .eq('user_id', userId)
+    .single();
+  
+  if (error) {
+    throw error;
+  }
+  
+  return {
+    documentId,
+    status: data.status,
+    progress: data.progress,
+    stage: data.processing_stage,
+    error: data.error_message,
+    batchProgress: data.current_batch && data.batch_count ? 
+      `${data.current_batch}/${data.batch_count}` : null,
+    resumable: ['processing_paused', 'error'].includes(data.status)
+  };
 }
 
 // Legacy function name for backward compatibility
@@ -638,7 +737,7 @@ export async function processUploadedDocument(
   
   // Start async processing of the document
   Promise.resolve().then(() => {
-    processDocumentAsync(document)
+    processDocumentInStages(document)
       .catch((error: Error | unknown) => {
         console.error(`Async processing error for document ${documentId}:`, error);
         void supabaseAdmin
@@ -973,7 +1072,7 @@ async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string)
       // Update document progress if we have a document ID
       if (documentId) {
         const progress = Math.round(25 + ((95 - 25) * (i + 1) / batches.length));
-        await updateDocumentProgress(documentId, progress);
+        await updateDocumentStatus(documentId, 'processing', progress, 'embedding');
       }
     }
     
