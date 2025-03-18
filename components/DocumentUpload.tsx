@@ -160,6 +160,9 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
           <span className="text-xs text-gray-500 mt-1">
             Max file size: {MAX_FILE_SIZE_MB}MB
           </span>
+          <span className="text-xs text-gray-500 mt-1">
+            Recommended file size: &lt;{MAX_FILE_SIZE_MB*(5/6)}MB
+          </span>
         </label>
       </div>
       
