@@ -71,6 +71,14 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
     }, 300);
     
     try {
+      // Determine if we should use direct upload based on file size
+      // Files larger than 4MB will use direct upload to avoid Vercel limits
+      const useDirectUpload = selectedFile.size > 4 * 1024 * 1024;
+      
+      if (useDirectUpload) {
+        console.log(`Using direct upload for large file (${Math.round(selectedFile.size/1024/1024)}MB)`);
+      }
+      
       const result = await uploadDocumentClient(selectedFile, userId);
       
       clearInterval(progressInterval);
@@ -90,6 +98,22 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
     } catch (err) {
       console.error('Upload error:', err);
       clearInterval(progressInterval);
+      
+      // Handle specific error for payload too large
+      if (err instanceof Error && 
+          (err.message.includes('413') || 
+           err.message.toLowerCase().includes('payload too large'))) {
+        setError('File is too large for standard upload. The system will automatically use direct upload.');
+        
+        // Wait a moment and retry with direct upload
+        setTimeout(() => {
+          setError(null);
+          setProgress(0);
+          handleUpload();
+        }, 3000);
+        return;
+      }
+      
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setIsUploading(false);
@@ -140,12 +164,12 @@ export function DocumentUpload({ userId, onUploadComplete }: DocumentUploadProps
       </div>
       
       {selectedFile && !isUploading && (
-        <div className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
-          <div className="flex items-center">
-            <FileText className="h-5 w-5 text-gray-500 mr-2" />
-            <span className="text-sm">{selectedFile.name}</span>
+        <div className="flex items-center justify-between bg-muted p-3 rounded-md max-w-full overflow-hidden">
+          <div className="flex items-center overflow-hidden">
+            <FileText className="h-5 w-5 text-muted-foreground flex-shrink-0 mr-2" />
+            <span className="text-sm truncate text-foreground">{selectedFile.name}</span>
           </div>
-          <Button onClick={handleUpload} size="sm">
+          <Button onClick={handleUpload} size="sm" className="flex-shrink-0 ml-2">
             Upload File
           </Button>
         </div>

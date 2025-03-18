@@ -109,46 +109,75 @@ export async function uploadDocumentClient(file: File, userId: string): Promise<
   }
   
   try {
-    // Create form data
+    console.log(`Preparing to upload ${file.name} (${Math.round(file.size / 1024 / 1024)}MB) for user ${userId}`);
+    
+    // Step 1: Get a signed URL from our server
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('fileName', file.name);
+    formData.append('fileType', file.type);
     formData.append('userId', userId);
     
-    // Upload to API
-    console.log(`Uploading document ${file.name} for user ${userId}...`);
-    const response = await fetch('/api/documents/upload', {
+    const signedUrlResponse = await fetch('/api/documents/signed-url', {
       method: 'POST',
       body: formData,
-      // Don't set Content-Type for FormData
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache',
-      },
     });
     
-    if (!response.ok) {
-      // First clone the response before reading it to avoid the stream already read error
-      const errorText = await response.text().catch(() => `Failed to upload document (${response.status})`);
-      console.error(`Error response (${response.status}):`, errorText);
-      try {
-        // Try to parse as JSON if possible
-        const errorData = JSON.parse(errorText);
-        throw new Error(errorData.error || `Failed to upload document (${response.status})`);
-      } catch (e) {
-        // If parsing fails, just use the text
-        throw new Error(errorText || `Failed to upload document (${response.status})`);
-      }
+    if (!signedUrlResponse.ok) {
+      const errorText = await signedUrlResponse.text().catch(() => `Failed to get signed URL (${signedUrlResponse.status})`);
+      console.error(`Error getting signed URL (${signedUrlResponse.status}):`, errorText);
+      throw new Error(errorText || `Failed to get signed URL (${signedUrlResponse.status})`);
     }
     
-    const data = await response.json();
+    const { signedUrl, filePath } = await signedUrlResponse.json();
+    
+    if (!signedUrl) {
+      throw new Error('Failed to get signed URL for upload');
+    }
+    
+    // Step 2: Upload directly to Supabase Storage using the signed URL
+    console.log(`Uploading file directly to storage at path: ${filePath}`);
+    const uploadResponse = await fetch(signedUrl, {
+      method: 'PUT',
+      body: file,
+      headers: {
+        'Content-Type': file.type,
+        'Cache-Control': 'max-age=31536000'
+      }
+    });
+    
+    if (!uploadResponse.ok) {
+      const errorText = await uploadResponse.text().catch(() => `Failed to upload to storage (${uploadResponse.status})`);
+      throw new Error(errorText || `Failed to upload to storage (${uploadResponse.status})`);
+    }
+    
+    // Step 3: Notify our server to process the uploaded file
+    console.log(`File uploaded successfully, notifying server to process file at: ${filePath}`);
+    const processResponse = await fetch('/api/documents/process-uploaded', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        filePath,
+        userId
+      }),
+    });
+    
+    if (!processResponse.ok) {
+      const errorText = await processResponse.text().catch(() => `Failed to process document (${processResponse.status})`);
+      console.error(`Error processing document (${processResponse.status}):`, errorText);
+      throw new Error(errorText || `Failed to process document (${processResponse.status})`);
+    }
+    
+    const data = await processResponse.json();
     
     // Ensure we have a valid document object
-    if (!data.document || !data.document.id) {
-      console.warn('Upload response is missing document data:', data);
+    if (!data.success || !data.document || !data.document.id) {
+      console.warn('Processing response is missing document data:', data);
       throw new Error('Invalid response from server: missing document data');
     }
     
-    console.log(`Document uploaded successfully, id: ${data.document.id}`);
+    console.log(`Document uploaded and processing started, id: ${data.document.id}`);
     return {
       success: true,
       document: data.document

@@ -52,7 +52,9 @@ export function FileUploader({ onUpload, isUploading }: FileUploaderProps) {
   return (
     <div
       className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-        isDragging ? "border-blue-500 bg-blue-50" : "border-gray-300"
+        isDragging 
+          ? "border-blue-500 bg-blue-50 dark:bg-blue-950/20" 
+          : "border-gray-300 dark:border-gray-700"
       }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -67,11 +69,11 @@ export function FileUploader({ onUpload, isUploading }: FileUploaderProps) {
       />
       
       <div className="flex flex-col items-center">
-        <Upload className="w-10 h-10 text-gray-400 mb-2" />
-        <p className="text-sm font-medium">
+        <Upload className="w-10 h-10 text-gray-400 dark:text-gray-500 mb-2" />
+        <p className="text-sm font-medium text-foreground">
           {isDragging ? "Drop file here" : "Drag & drop a file"}
         </p>
-        <p className="text-xs text-gray-500 mb-3">PDF, DOCX, or TXT (Max 50MB)</p>
+        <p className="text-xs text-muted-foreground mb-3">PDF, DOCX, or TXT (Max 100MB)</p>
         
         <Button 
           onClick={() => fileInputRef.current?.click()}

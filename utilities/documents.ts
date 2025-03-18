@@ -60,6 +60,29 @@ export async function getDocuments(userId?: string): Promise<UploadedDocument[]>
     .select('*')
     .eq('user_id', userId);
     
+  // Clean up document titles by removing UUID prefixes
+  if (data && data.length > 0) {
+    data.forEach(doc => {
+      if (doc.title && doc.title.includes('-')) {
+        // Check for UUID pattern (same logic as in processUploadedDocument)
+        const uuidPattern = /^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}-/i;
+        const match = doc.title.match(uuidPattern);
+        
+        if (match && match[0]) {
+          // Remove the UUID prefix including the trailing hyphen
+          doc.title = doc.title.substring(match[0].length);
+        } else {
+          // Fallback: try to match a simpler pattern (like 'abc123-filename.txt')
+          const parts = doc.title.split('-');
+          // Check if first part might be an ID (alphanumeric, typically 8-12 chars)
+          if (parts.length > 1 && /^[a-f0-9]{7,32}$/i.test(parts[0])) {
+            doc.title = parts.slice(1).join('-');
+          }
+        }
+      }
+    });
+  }
+    
   return data || [];
 }
 
@@ -92,11 +115,14 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
     throw new Error("The document appears to be empty or could not be processed");
   }
   
+  // Ensure we're using the actual file name, not a path or ID
+  const fileName = file.name.includes('/') ? file.name.split('/').pop() || file.name : file.name;
+  
   // Create document metadata
   const documentId = uuidv4();
   const document: UploadedDocument = {
     id: documentId,
-    title: file.name,
+    title: fileName,
     created_at: new Date().toISOString(),
     content,
     user_id: userId,
@@ -540,12 +566,34 @@ export async function processUploadedDocument(
   }
   
   // Extract filename from the path
-  const fileName = filePath.split('/').pop() || 'unknown-file';
+  const pathParts = filePath.split('/');
+  const fileName = pathParts[pathParts.length-1];
+  
+  // UUID format is typically xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars with hyphens)
+  // The format is usually uuid-filename, so we need to remove the prefix
+  let originalFileName = fileName;
+  
+  // Check if there's a UUID prefix (look for a pattern like: 8-4-4-4-12 hex chars followed by a hyphen)
+  const uuidPattern = /^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}-/i;
+  const match = fileName.match(uuidPattern);
+  if (match && match[0]) {
+    // Remove the UUID prefix including the trailing hyphen
+    originalFileName = fileName.substring(match[0].length);
+  } else if (fileName.includes('-')) {
+    // Fallback: try to match a simpler pattern (like 'abc123-filename.txt')
+    const parts = fileName.split('-');
+    // Check if first part might be an ID (alphanumeric, typically 8-12 chars)
+    if (parts.length > 1 && /^[a-f0-9]{7,32}$/i.test(parts[0])) {
+      originalFileName = parts.slice(1).join('-');
+    }
+  }
+  
+  console.log(`Extracted original filename: "${originalFileName}" from path: "${filePath}"`);
   
   // Determine file type based on name or blob type
   const fileType = fileData.type || 
-    (fileName.endsWith('.pdf') ? 'application/pdf' : 
-     fileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+    (originalFileName.endsWith('.pdf') ? 'application/pdf' : 
+     originalFileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
      'text/plain');
   
   // Validate file type
@@ -566,7 +614,7 @@ export async function processUploadedDocument(
   const documentId = uuidv4();
   const document: UploadedDocument = {
     id: documentId,
-    title: fileName,
+    title: originalFileName,
     created_at: new Date().toISOString(),
     content: text,
     user_id: userId,

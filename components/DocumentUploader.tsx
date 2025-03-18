@@ -19,6 +19,7 @@ export function DocumentUploader({
 }: DocumentUploaderProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -45,6 +46,12 @@ export function DocumentUploader({
 
     try {
       setIsUploading(true);
+      setStatusMessage(null);
+      
+      // Show message for large files using direct upload
+      if (file.size > 4 * 1024 * 1024) {
+        setStatusMessage(`Using direct upload for large file (${Math.round(file.size/1024/1024)}MB)`);
+      }
       
       // Prevent the event from bubbling up to prevent Next.js hot reload
       const result = await uploadDocumentClient(file, userId);
@@ -52,6 +59,7 @@ export function DocumentUploader({
       if (result.success && result.document) {
         console.log('Upload successful:', result.document);
         setFileName(null);
+        setStatusMessage(null);
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
@@ -62,6 +70,21 @@ export function DocumentUploader({
       }
     } catch (error) {
       console.error('Upload error:', error);
+      
+      // Handle payload too large errors
+      if (error instanceof Error && 
+          (error.message.includes('413') || 
+           error.message.toLowerCase().includes('payload too large'))) {
+        setStatusMessage('File is too large for standard upload. Retrying with direct upload...');
+        
+        // Wait a moment and retry
+        setTimeout(() => {
+          setStatusMessage(null);
+          handleUpload();
+        }, 2000);
+        return;
+      }
+      
       onUploadError?.(error instanceof Error ? error.message : 'Upload failed');
     } finally {
       setIsUploading(false);
@@ -70,27 +93,33 @@ export function DocumentUploader({
 
   return (
     <div className={cn("flex flex-col space-y-4", className)}>
-      <div className="flex gap-2">
+      <div className="flex gap-2 max-w-full">
         <Input
           ref={fileInputRef}
           type="file"
           onChange={handleFileChange}
-          className="flex-1"
+          className="flex-1 min-w-0"
           accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
           disabled={isUploading}
         />
         <Button 
           onClick={handleUpload} 
           disabled={!fileName || isUploading}
-          className="whitespace-nowrap"
+          className="whitespace-nowrap flex-shrink-0"
         >
           {isUploading ? 'Uploading...' : 'Upload Document'}
         </Button>
       </div>
       
       {fileName && (
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-muted-foreground truncate">
           Selected file: {fileName}
+        </div>
+      )}
+      
+      {statusMessage && (
+        <div className="text-sm text-primary">
+          {statusMessage}
         </div>
       )}
     </div>
