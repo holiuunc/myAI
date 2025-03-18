@@ -9,7 +9,7 @@ import { ErrorWrapper } from "./parts/error/error-wrapper";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "myDucky - AI Chat Assistant",
+  title: "myDucky",
   description: "An AI-powered chat assistant",
 };
 
