@@ -26,7 +26,7 @@ export default function Chat() {
   const [loginModalOpen, setLoginModalOpen] = useState(false);
 
   // Add this console log
-  console.log("Rendering Chat component, user state:", user);
+  // console.log("Rendering Chat component, user state:", user);
 
   return (
     <>

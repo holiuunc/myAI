@@ -10,7 +10,7 @@ export async function DELETE(
   const userId = searchParams.get('userId');
   const forceDelete = searchParams.get('force') === 'true';
   
-  console.log(`API route: DELETE /api/documents/${id} called - userId: ${userId || 'not provided'}, force: ${forceDelete}`);
+  // console.log(`API route: DELETE /api/documents/${id} called - userId: ${userId || 'not provided'}, force: ${forceDelete}`);
   
   if (!userId) {
     return NextResponse.json(
@@ -21,9 +21,9 @@ export async function DELETE(
   
   try {
     // Pass the user ID to the deleteDocument function
-    console.log(`Attempting to delete document ${id} for user ${userId}`);
+    // console.log(`Attempting to delete document ${id} for user ${userId}`);
     await deleteDocument(id, userId, forceDelete);
-    console.log(`Successfully deleted document with ID: ${id}`);
+    // console.log(`Successfully deleted document with ID: ${id}`);
     return NextResponse.json({ success: true, id });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

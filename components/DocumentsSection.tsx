@@ -28,11 +28,11 @@ export function DocumentsSection({ userId }: DocumentsSectionProps) {
     try {
       setIsLoading(true);
       setError(null);
-      console.log('Loading documents for user:', userId);
+      // console.log('Loading documents for user:', userId);
       const result = await getDocumentsClient(userId);
       
       if (result.success) {
-        console.log(`Successfully loaded ${result.documents?.length || 0} documents`);
+        // console.log(`Successfully loaded ${result.documents?.length || 0} documents`);
         setDocuments(result.documents || []);
       } else {
         console.error('Error returned from getDocumentsClient:', result.error);

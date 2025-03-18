@@ -92,7 +92,7 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
     throw new Error("User must be logged in to upload documents");
   }
   
-  console.log(`Uploading document: ${file.name} for user: ${userId}`);
+  // console.log(`Uploading document: ${file.name} for user: ${userId}`);
   
   // Validate file size
   const maxFileSizeBytes = MAX_FILE_SIZE_MB * 1024 * 1024;

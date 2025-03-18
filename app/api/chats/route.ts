@@ -44,8 +44,8 @@ export async function POST(req: Request) {
   try {
     const { messages } = await req.json();
     
-    console.log("Attempting to upsert chat for user:", user.id);
-    console.log("Messages count:", Array.isArray(messages) ? messages.length : 'not an array');
+    // console.log("Attempting to upsert chat for user:", user.id);
+    // console.log("Messages count:", Array.isArray(messages) ? messages.length : 'not an array');
     
     const { error } = await supabaseAdmin
       .from('chats')

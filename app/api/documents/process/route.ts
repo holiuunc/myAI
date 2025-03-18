@@ -66,7 +66,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay = 1000):
 async function processChunks(chunks: any[], userId: string, indexName: string) {
   try {
     // Additional logging to debug
-    console.log(`Processing ${chunks.length} chunks for user ${userId} in index ${indexName}`);
+    // console.log(`Processing ${chunks.length} chunks for user ${userId} in index ${indexName}`);
     
     // Ensure we have an OpenAI API key
     if (!process.env.OPENAI_API_KEY) {
@@ -239,7 +239,7 @@ export async function POST(request: NextRequest) {
             { status: 401 }
           );
         }
-        console.log(`No authenticated user, using user_id from chunks: ${userId}`);
+        // console.log(`No authenticated user, using user_id from chunks: ${userId}`);
       }
     } catch (error) {
       // If authentication check fails, fall back to using the user_id from the chunks
@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
           { status: 401 }
         );
       }
-      console.log(`Authentication check failed, using user_id from chunks: ${userId}`);
+      // console.log(`Authentication check failed, using user_id from chunks: ${userId}`);
     }
     
     // Process chunks

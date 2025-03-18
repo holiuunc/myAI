@@ -3,7 +3,7 @@ import { processDocument } from '@/utilities/documents';
 import { MAX_FILE_SIZE_MB } from '@/configuration/documents';
 
 export async function POST(request: NextRequest) {
-  console.log('API route: POST /api/documents/upload called');
+  // console.log('API route: POST /api/documents/upload called');
   
   try {
     // Check if the request is a form data request
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     const file = formData.get('file') as File;
     const userId = formData.get('userId') as string;
     
-    console.log(`Processing upload for user ${userId || 'unknown'}, file: ${file?.name || 'none'}, size: ${file ? Math.round(file.size/1024/1024) : 0}MB`);
+    // console.log(`Processing upload for user ${userId || 'unknown'}, file: ${file?.name || 'none'}, size: ${file ? Math.round(file.size/1024/1024) : 0}MB`);
     
     // Validate request data
     if (!file) {
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Process the document
-    console.log(`Calling processDocument for file: ${file.name}, size: ${Math.round(file.size/1024)}KB`);
+    // console.log(`Calling processDocument for file: ${file.name}, size: ${Math.round(file.size/1024)}KB`);
     const document = await processDocument(file, userId);
     
     console.log(`Document processed successfully, ID: ${document.id}`);

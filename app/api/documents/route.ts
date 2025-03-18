@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const userId = searchParams.get('userId');
   
-  console.log(`API route: GET /api/documents called with userId: ${userId || 'not provided'}`);
+  // console.log(`API route: GET /api/documents called with userId: ${userId || 'not provided'}`);
   
   if (!userId) {
     return NextResponse.json(
@@ -17,9 +17,9 @@ export async function GET(request: Request) {
   
   try {
     // Pass the user ID to getDocuments
-    console.log(`Fetching documents for user: ${userId}`);
+    // console.log(`Fetching documents for user: ${userId}`);
     const documents = await getDocuments(userId);
-    console.log(`Found ${documents.length} documents for user ${userId}`);
+    // console.log(`Found ${documents.length} documents for user ${userId}`);
     return NextResponse.json({ documents });
   } catch (error) {
     console.error('Error fetching documents:', error);

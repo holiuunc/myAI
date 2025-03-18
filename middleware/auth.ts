@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/configuration/supabase';
 
 export async function getAuthenticatedUser() {
   const sessionId = cookies().get('session_id')?.value;
-  console.log("Auth check - Session ID:", sessionId ? "Found" : "Not found");
+  // console.log("Auth check - Session ID:", sessionId ? "Found" : "Not found");
   
   if (!sessionId) {
     return null;
@@ -40,7 +40,7 @@ export async function getAuthenticatedUser() {
       return null;
     }
     
-    console.log("User authenticated:", user?.email);
+    // console.log("User authenticated:", user?.email);
     return user ? { id: user.id, email: user.email } : null;
   } catch (error) {
     console.error('Session validation error:', error);

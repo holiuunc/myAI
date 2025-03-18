@@ -16,7 +16,7 @@ export async function getDocumentsClient(userId: string): Promise<{
   
   try {
     // Fetch documents from API with better URL construction
-    console.log(`Fetching documents for user ${userId}`);
+    // console.log(`Fetching documents for user ${userId}`);
     const response = await fetch(`/api/documents?userId=${encodeURIComponent(userId)}`, {
       method: 'GET',
       headers: {
@@ -32,7 +32,7 @@ export async function getDocumentsClient(userId: string): Promise<{
     }
     
     const data = await response.json();
-    console.log(`Successfully fetched ${data.documents?.length || 0} documents`);
+    // console.log(`Successfully fetched ${data.documents?.length || 0} documents`);
     return {
       success: true,
       documents: data.documents || []
@@ -62,7 +62,7 @@ export async function deleteDocumentClient(documentId: string, userId: string): 
   }
   
   try {
-    console.log(`Deleting document ${documentId} for user ${userId}`);
+    // console.log(`Deleting document ${documentId} for user ${userId}`);
     const response = await fetch(`/api/documents/${documentId}?userId=${encodeURIComponent(userId)}`, {
       method: 'DELETE',
       headers: {
