@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/configuration/supabase';
 import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES } from '@/configuration/documents';
 import PDFParser from 'pdf2json';
 import { resolvePDFJS } from 'pdfjs-serverless';
+import { createHash } from 'crypto';
 
 // Initialize Pinecone
 const pineconeClient = new Pinecone({
@@ -23,6 +24,33 @@ const openai = new OpenAI({
 // In a production app, replace with a more robust solution like Redis or a database table
 const processingQueue = new Map<string, boolean>();
 
+// Simple in-memory cache for embeddings
+const embeddingCache = new Map();
+
+// Hash function for caching
+function hashText(text: string): string {
+  return createHash('md5').update(text).digest('hex');
+}
+
+// OpenAI embedding generation with caching
+async function generateEmbeddingWithCache(text: string) {
+  const hash = hashText(text);
+  
+  if (embeddingCache.has(hash)) {
+    return embeddingCache.get(hash);
+  }
+  
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-ada-002',
+    input: text,
+  });
+  
+  const embedding = response.data[0].embedding;
+  embeddingCache.set(hash, embedding);
+  
+  return embedding;
+}
+
 // Update the getDocuments function to be user-specific
 export async function getDocuments(userId?: string): Promise<UploadedDocument[]> {
   if (!userId) return [];
@@ -31,6 +59,29 @@ export async function getDocuments(userId?: string): Promise<UploadedDocument[]>
     .from('documents')
     .select('*')
     .eq('user_id', userId);
+    
+  // Clean up document titles by removing UUID prefixes
+  if (data && data.length > 0) {
+    data.forEach(doc => {
+      if (doc.title && doc.title.includes('-')) {
+        // Check for UUID pattern (same logic as in processUploadedDocument)
+        const uuidPattern = /^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}-/i;
+        const match = doc.title.match(uuidPattern);
+        
+        if (match && match[0]) {
+          // Remove the UUID prefix including the trailing hyphen
+          doc.title = doc.title.substring(match[0].length);
+        } else {
+          // Fallback: try to match a simpler pattern (like 'abc123-filename.txt')
+          const parts = doc.title.split('-');
+          // Check if first part might be an ID (alphanumeric, typically 8-12 chars)
+          if (parts.length > 1 && /^[a-f0-9]{7,32}$/i.test(parts[0])) {
+            doc.title = parts.slice(1).join('-');
+          }
+        }
+      }
+    });
+  }
     
   return data || [];
 }
@@ -41,7 +92,7 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
     throw new Error("User must be logged in to upload documents");
   }
   
-  console.log(`Uploading document: ${file.name} for user: ${userId}`);
+  // console.log(`Uploading document: ${file.name} for user: ${userId}`);
   
   // Validate file size
   const maxFileSizeBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -64,11 +115,14 @@ export async function uploadDocument(file: File, userId?: string): Promise<Uploa
     throw new Error("The document appears to be empty or could not be processed");
   }
   
+  // Ensure we're using the actual file name, not a path or ID
+  const fileName = file.name.includes('/') ? file.name.split('/').pop() || file.name : file.name;
+  
   // Create document metadata
   const documentId = uuidv4();
   const document: UploadedDocument = {
     id: documentId,
-    title: file.name,
+    title: fileName,
     created_at: new Date().toISOString(),
     content,
     user_id: userId,
@@ -324,7 +378,7 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
     // Check if document exists and belongs to user
     const { data: doc } = await supabaseAdmin
       .from('documents')
-      .select('id')
+      .select('id, title')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -334,7 +388,24 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
       throw new Error(`Document with ID ${id} not found or doesn't belong to you`);
     }
     
-    // Delete from Supabase
+    // 1. Delete the file from storage first
+    try {
+      const { error: storageError } = await supabaseAdmin.storage
+        .from('documents')
+        .remove([`${userId}/${doc.title}`]);
+        
+      if (storageError) {
+        console.warn(`Failed to delete storage file for document ${id}: ${storageError.message}`);
+        // Continue with deletion even if storage file deletion fails
+      } else {
+        console.log(`Deleted storage file for document ${id}`);
+      }
+    } catch (storageError) {
+      console.warn(`Error deleting storage file: ${storageError}`);
+      // Continue with deletion even if storage file deletion fails
+    }
+    
+    // 2. Delete from Supabase database
     await supabaseAdmin
       .from('documents')
       .delete()
@@ -343,20 +414,17 @@ export async function deleteDocument(id: string, userId: string, forceDelete = f
       
     console.log(`Removed document metadata for ID ${id}`);
     
-    // Only attempt to remove from Pinecone if not force deleting
+    // 3. Only attempt to remove from Pinecone if not force deleting
     if (!forceDelete) {
       try {
-        // Pass the userId here!
         await deleteDocumentChunksFromPinecone(id, userId);
       } catch (pineconeError) {
         console.error(`Error deleting from Pinecone: ${pineconeError}`);
-        // Only throw if not force deleting
         if (!forceDelete) throw pineconeError;
       }
     }
   } catch (error) {
     console.error(`Error in deleteDocument: ${error}`);
-    // If force delete, don't throw the error
     if (!forceDelete) throw error;
   }
 }
@@ -383,7 +451,7 @@ async function extractTextFromFile(file: File): Promise<string> {
       try {
         // Capture console warnings temporarily
         const originalWarn = console.warn;
-        console.warn = function(message: string, ...args: any[]) {
+        console.warn = (message: string, ...args: any[]) => {
           // Filter out known noise warnings
           if (message && typeof message === 'string' &&
               !(message.includes('Unsupported color mode') || 
@@ -407,7 +475,7 @@ async function extractTextFromFile(file: File): Promise<string> {
               .filter((item: any) => 'str' in item) // Filter for text items that have 'str' property
               .map((item: any) => item.str)
               .join(' ');
-            fullText += pageText + ' ';
+            fullText += `${pageText} `;
           }
           text = fullText;
         } finally {
@@ -420,7 +488,7 @@ async function extractTextFromFile(file: File): Promise<string> {
         
         // Capture console warnings temporarily
         const originalWarn = console.warn;
-        console.warn = function(message: string, ...args: any[]) {
+        console.warn = (message: string, ...args: any[]) => {
           // Filter out known noise warnings
           if (message && typeof message === 'string' &&
               !(message.includes('Unsupported color mode') || 
@@ -482,6 +550,187 @@ async function extractTextFromFile(file: File): Promise<string> {
   } catch (error) {
     console.error(`Error extracting text from ${file.type} file:`, error);
     throw new Error(`Failed to extract text from ${file.type} file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Add this function to your documents.ts file
+export async function processUploadedDocument(
+  fileData: Blob, 
+  filePath: string,
+  userId: string
+): Promise<UploadedDocument> {
+  console.log(`Processing uploaded file from storage: ${filePath}`);
+  
+  if (!userId) {
+    throw new Error("User must be logged in to process documents");
+  }
+  
+  // Extract filename from the path
+  const pathParts = filePath.split('/');
+  const fileName = pathParts[pathParts.length-1];
+  
+  // UUID format is typically xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars with hyphens)
+  // The format is usually uuid-filename, so we need to remove the prefix
+  let originalFileName = fileName;
+  
+  // Check if there's a UUID prefix (look for a pattern like: 8-4-4-4-12 hex chars followed by a hyphen)
+  const uuidPattern = /^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}-/i;
+  const match = fileName.match(uuidPattern);
+  if (match && match[0]) {
+    // Remove the UUID prefix including the trailing hyphen
+    originalFileName = fileName.substring(match[0].length);
+  } else if (fileName.includes('-')) {
+    // Fallback: try to match a simpler pattern (like 'abc123-filename.txt')
+    const parts = fileName.split('-');
+    // Check if first part might be an ID (alphanumeric, typically 8-12 chars)
+    if (parts.length > 1 && /^[a-f0-9]{7,32}$/i.test(parts[0])) {
+      originalFileName = parts.slice(1).join('-');
+    }
+  }
+  
+  console.log(`Extracted original filename: "${originalFileName}" from path: "${filePath}"`);
+  
+  // Determine file type based on name or blob type
+  const fileType = fileData.type || 
+    (originalFileName.endsWith('.pdf') ? 'application/pdf' : 
+     originalFileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+     'text/plain');
+  
+  // Validate file type
+  if (!ALLOWED_FILE_TYPES.includes(fileType)) {
+    throw new Error(`File type '${fileType}' not supported. Please upload PDF, DOCX, or text files.`);
+  }
+  
+  // Extract content from the blob
+  const text = await extractTextFromBlob(fileData);
+  console.log(`Extracted ${text.length} characters from file`);
+
+  // Check for empty content
+  if (!text || text.trim().length === 0) {
+    throw new Error("The document appears to be empty or could not be processed");
+  }
+  
+  // Create document metadata
+  const documentId = uuidv4();
+  const document: UploadedDocument = {
+    id: documentId,
+    title: originalFileName,
+    created_at: new Date().toISOString(),
+    content: text,
+    user_id: userId,
+    status: 'pending',
+    progress: 0
+  };
+  
+  // Store document in Supabase
+  await supabaseAdmin
+    .from('documents')
+    .insert([{
+      id: document.id,
+      title: document.title,
+      user_id: userId,
+      created_at: document.created_at,
+      file_type: fileType,
+      status: 'pending',
+      progress: 0,
+      vector_count: 0
+    }]);
+  
+  // Start async processing of the document
+  Promise.resolve().then(() => {
+    processDocumentAsync(document)
+      .catch((error: Error | unknown) => {
+        console.error(`Async processing error for document ${documentId}:`, error);
+        void supabaseAdmin
+          .from('documents')
+          .update({
+            status: 'error',
+            error_message: error instanceof Error ? error.message : String(error)
+          })
+          .eq('id', documentId);
+      });
+  });
+
+  // After successful processing, delete the original file
+  try {
+    const { error: storageError } = await supabaseAdmin.storage
+      .from('documents')
+      .remove([filePath]);
+      
+    if (storageError) {
+      console.warn(`Failed to delete processed file ${filePath}: ${storageError.message}`);
+    } else {
+      console.log(`Deleted processed file ${filePath} to save storage space`);
+    }
+  } catch (storageError) {
+    console.warn(`Error during cleanup of processed file: ${storageError}`);
+    // Non-critical error, don't throw
+  }
+  
+  return document;
+}
+
+// Helper function to extract text from a Blob
+async function extractTextFromBlob(blob: Blob): Promise<string> {
+  // Convert Blob to ArrayBuffer
+  const arrayBuffer = await blob.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  
+  let text: string;
+  
+  try {
+    // Use existing logic but with buffer instead of file
+    if (blob.type === 'application/pdf') {
+      // First try pdfjs-serverless as it's more reliable
+      try {
+        const { getDocument } = await resolvePDFJS();
+        const uint8Array = new Uint8Array(buffer);
+        const pdf = await getDocument({ data: uint8Array, useSystemFonts: true }).promise;
+        
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items
+            .filter((item: any) => 'str' in item)
+            .map((item: any) => item.str)
+            .join(' ');
+          fullText += `${pageText} `;
+        }
+        text = fullText;
+      } catch (pdfJsError) {
+        console.warn('pdfjs-serverless failed, falling back to pdf2json:', pdfJsError);
+        
+        const pdfParser = new PDFParser(null);
+        text = await new Promise<string>((resolve, reject) => {
+          pdfParser.on('pdfParser_dataError', (errData: any) => reject(errData.parserError));
+          pdfParser.on('pdfParser_dataReady', () => {
+            resolve(pdfParser.getRawTextContent());
+          });
+          
+          pdfParser.parseBuffer(buffer);
+        });
+      }
+    } else if (blob.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      // Simplified DOCX extraction using same approach as in extractTextFromFile
+      text = new TextDecoder().decode(buffer)
+        .replace(/\uFFFD/g, ' ')
+        .replace(/[^\x20-\x7E\n\r\t]/g, ' ');
+    } else {
+      // Plain text
+      text = new TextDecoder().decode(buffer);
+    }
+    
+    // Clean up as in extractTextFromFile
+    text = text
+      .replace(/\s+/g, ' ')
+      .replace(/\n\s*\n/g, '\n')
+      .trim();
+    
+    return sanitizeText(text);
+  } catch (error) {
+    console.error(`Error extracting text:`, error);
+    throw new Error(`Text extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
@@ -671,7 +920,7 @@ export function splitIntoChunks(content: string, documentId: string, documentTit
 
 // biome-ignore lint/suspicious/noExplicitAny: <explanation>
 async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string): Promise<void> {
-  console.log(`Storing ${embeddedChunks.length} chunks in Pinecone using API route`);
+  console.log(`Storing ${embeddedChunks.length} chunks in Pinecone directly`);
   
   if (!embeddedChunks.length) {
     console.warn('No chunks to store in Pinecone');
@@ -681,138 +930,62 @@ async function storeChunksInPinecone(embeddedChunks: any[], documentId?: string)
   // Get the user ID from the first chunk
   const userId = embeddedChunks[0].user_id;
   
-  // Prepare chunks to send to the API
-  const chunksToProcess = embeddedChunks.map((chunk: any) => ({
-    text: chunk.text,
-    pre_context: chunk.pre_context,
-    post_context: chunk.post_context,
-    source_url: chunk.source_url,
-    source_description: chunk.source_description,
-    order: chunk.order,
-    user_id: chunk.user_id,
-  }));
-  
-  // Set batch size to 200 as previously determined optimal value
-  // This keeps within OpenAI's token limits while optimizing speed
-  const batchSize = 200; // Based on previous optimization
-  const batches = [];
-  
-  for (let i = 0; i < chunksToProcess.length; i += batchSize) {
-    batches.push(chunksToProcess.slice(i, i + batchSize));
-  }
-  
-  console.log(`Processing chunks in ${batches.length} batches of max ${batchSize} chunks each`);
-  
-  let totalChunksProcessed = 0;
-  
-  // Get the base URL for the API
-  // In server-side code, we need to use the full URL, not a relative one
-  let baseUrl = 'http://localhost:3000';
-  
-  // In production environments
-  if (process.env.VERCEL_URL) {
-    baseUrl = `https://${process.env.VERCEL_URL}`;
-  } else if (process.env.NEXTAUTH_URL) {
-    baseUrl = process.env.NEXTAUTH_URL;
-  }
+  try {
+    // Get namespace-specific index
+    const namespaceIndex = pineconeIndex.namespace(userId);
     
-  const apiUrl = `${baseUrl}/api/documents/process`;
-  
-  // Calculate progress increments (from 25% to 95%)
-  const progressStart = 25;
-  const progressMax = 95;
-  
-  // Process batches serially to ensure progress updates are sequential and visible
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    const batchNumber = i + 1;
+    // Process chunks in batches with reasonable size
+    const batchSize = 100;
+    const batches = [];
     
-    try {
-      // Calculate a more dramatic progress increment for better visibility
-      // Progress will jump by larger amounts for more visible UI feedback
-      const currentProgress = Math.round(progressStart + ((progressMax - progressStart) * i / batches.length));
-      
-      // Update progress before processing batch
-      if (documentId) {
-        // Force immediate progress update with direct status update
-        console.log(`Setting progress to ${currentProgress}% before processing batch ${batchNumber}/${batches.length}`);
-        await supabaseAdmin
-          .from('documents')
-          .update({
-            progress: currentProgress,
-            status: 'processing',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', documentId);
-      }
-      
-      console.log(`Processing batch ${batchNumber}/${batches.length} with ${batch.length} chunks`);
-      
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          chunks: batch,
-          indexName: PINECONE_INDEX_NAME, // Use the configured Pinecone index name
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to process chunks: ${errorText}`);
-      }
-      
-      const result = await response.json();
-      console.log(`Batch ${batchNumber} processed successfully: ${result.chunksProcessed} chunks`);
-      
-      totalChunksProcessed += (result.chunksProcessed || batch.length);
-      
-      // Update progress after processing batch with a higher value
-      if (documentId && batchNumber < batches.length) {
-        const nextProgress = Math.round(progressStart + ((progressMax - progressStart) * (i + 0.5) / batches.length));
-        console.log(`Setting progress to ${nextProgress}% after processing batch ${batchNumber}/${batches.length}`);
-        
-        // Use direct update to ensure status and progress are updated
-        await supabaseAdmin
-          .from('documents')
-          .update({
-            progress: nextProgress,
-            status: 'processing',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', documentId);
-      }
-      
-      // Small delay between batches to allow UI to update
-      if (batchNumber < batches.length) {
-        await new Promise(resolve => setTimeout(resolve, 750));
-      }
-    } catch (error) {
-      console.error(`Error processing batch ${batchNumber}:`, error);
-      throw error;
+    for (let i = 0; i < embeddedChunks.length; i += batchSize) {
+      batches.push(embeddedChunks.slice(i, i + batchSize));
     }
-  }
-  
-  console.log('Successfully stored all chunks in Pinecone via API route');
-  
-  // Final progress update before completion
-  if (documentId) {
-    console.log(`Setting progress to ${progressMax}% before finalizing`);
-    await supabaseAdmin
-      .from('documents')
-      .update({
-        progress: progressMax,
-        status: 'processing',
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', documentId);
+    
+    // Generate embeddings and process batches
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      console.log(`Processing batch ${i+1}/${batches.length} with ${batch.length} chunks`);
+      
+      // Generate embeddings
+      const batchEmbeddings = await Promise.all(
+        batch.map(chunk => generateEmbeddingWithCache(chunk.text))
+      );
+      
+      // Prepare vectors for Pinecone
+      const vectors = batch.map((chunk, index) => ({
+        id: `${chunk.source_url}-${chunk.order}`,
+        values: batchEmbeddings[index],
+        metadata: {
+          text: chunk.text,
+          pre_context: chunk.pre_context || '',
+          post_context: chunk.post_context || '',
+          source_url: chunk.source_url,
+          source_description: chunk.source_description || '',
+          order: chunk.order || 0,
+          user_id: chunk.user_id,
+        },
+      }));
+      
+      // Upload to Pinecone directly
+      await namespaceIndex.upsert(vectors);
+      
+      // Update document progress if we have a document ID
+      if (documentId) {
+        const progress = Math.round(25 + ((95 - 25) * (i + 1) / batches.length));
+        await updateDocumentProgress(documentId, progress);
+      }
+    }
+    
+    console.log('Successfully stored all chunks in Pinecone');
+  } catch (error) {
+    console.error('Error storing chunks in Pinecone:', error);
+    throw error;
   }
 }
 
 async function deleteDocumentChunksFromPinecone(documentId: string, userId: string): Promise<void> {
-  console.log(`Deleting chunks for document ${documentId} from Pinecone namespace: ${userId}`);
+  console.log(`Deleting chunks for document ${documentId} from Pinecone for user ${userId}`);
   
   try {
     // Get namespace-specific index
@@ -837,11 +1010,28 @@ async function deleteDocumentChunksFromPinecone(documentId: string, userId: stri
     
     if (vectorIds.length > 0) {
       console.log(`Found ${vectorIds.length} vectors to delete`);
-      await namespaceIndex.deleteMany(vectorIds);
+      
+      // Delete in batches of 1000 or fewer (Pinecone's limit)
+      const batchSize = 1000;
+      const batches = [];
+      
+      for (let i = 0; i < vectorIds.length; i += batchSize) {
+        batches.push(vectorIds.slice(i, i + batchSize));
+      }
+      
+      console.log(`Deleting vectors in ${batches.length} batches`);
+      
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        console.log(`Deleting batch ${i + 1}/${batches.length} with ${batch.length} vectors`);
+        await namespaceIndex.deleteMany(batch);
+      }
+      
       console.log(`Successfully deleted ${vectorIds.length} chunks for document ${documentId}`);
     } else {
       console.log(`No vectors found for document ${documentId}`);
     }
+
   } catch (error) {
     console.error(`Error deleting chunks from Pinecone:`, error);
     throw error;
