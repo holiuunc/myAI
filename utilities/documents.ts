@@ -354,7 +354,7 @@ async function processChunkBatch(chunks: any[], userId: string, documentId: stri
   // Process in larger sub-batches for better performance
   // OpenAI can handle larger batches (up to 2048 inputs per request)
   // Pinecone can handle up to 100 vectors per upsert
-  const SUB_BATCH_SIZE = 40;
+  const SUB_BATCH_SIZE = 10;
   
   for (let i = 0; i < chunks.length; i += SUB_BATCH_SIZE) {
     const subBatch = chunks.slice(i, i + SUB_BATCH_SIZE);
