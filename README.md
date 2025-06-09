@@ -74,25 +74,6 @@ The system implements Retrieval Augmented Generation (RAG) to provide accurate, 
 - Progress tracking for long-running operations
 - Asynchronous document processing with status updates
 
-### Security Model
-- Complete user isolation through namespaced vector storage
-- Server-side validation of user access to documents
-- Secure direct uploads with signed URLs
-- No cross-user data access possible by design
-
-## Deployment Architecture
-- Vercel for hosting the Next.js application
-- Supabase for backend database and storage
-- Pinecone for vector database
-- Optimized for serverless environment with careful timeout management
-
-## Development Principles
-- User Isolation - Every aspect of the system maintains strict separation between users
-- Simplicity First - Authentication and user experience prioritize simplicity
-- Contextual Intelligence - AI responses should effectively leverage user documents
-- Privacy & Security - User data and documents are secure and private
-- Performance - Optimized for both speed and cost efficiency
-
 ## Implementation Challenges Overcome
 - Large file uploads in serverless environments
 - Accurate text extraction from complex documents
