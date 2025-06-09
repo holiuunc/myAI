@@ -1,4 +1,3 @@
-**pw for supabase: NaFvi9frhOiMFeN0**
 # myDucky - Personalized Document-Assisted Learning Tool
 
 ## Project Overview
